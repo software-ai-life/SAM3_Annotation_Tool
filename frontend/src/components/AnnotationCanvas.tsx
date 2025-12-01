@@ -353,12 +353,15 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     templateBox,
     isPasting,
     copiedAnnotations,
+    polygonPoints,
     setTempBox,
     addTempPoint,
     clearTempPoints,
     setPreviewMask,
     setTemplateImage,
     setTemplateBox,
+    addPolygonPoint,
+    clearPolygonPoints,
     updateAnnotation,
     selectAnnotation,
     deselectAll,
@@ -853,7 +856,81 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       ctx.lineTo(mousePosition.x, mousePosition.y + 10);
       ctx.stroke();
     }
-  }, [currentImage, annotations, tempPoints, tempBox, previewMask, controlPoints, editingAnnotationId, draggingPointIndex, currentTool, templateImage, templateBox, isPasting, copiedAnnotations, mousePosition]);
+    
+    // 繪製手動多邊形（polygon 工具）
+    if (currentTool === 'polygon' && polygonPoints.length > 0) {
+      // 繪製已有頂點間的連線
+      ctx.beginPath();
+      ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
+      for (let i = 1; i < polygonPoints.length; i++) {
+        ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
+      }
+      
+      // 如果滑鼠位置存在，畫到滑鼠位置（動態預覽）
+      if (mousePosition) {
+        ctx.lineTo(mousePosition.x, mousePosition.y);
+        // 如果點數 >= 3，也畫回起點的虛線（閉合預覽）
+        if (polygonPoints.length >= 2) {
+          ctx.setLineDash([4, 4]);
+          ctx.lineTo(polygonPoints[0].x, polygonPoints[0].y);
+          ctx.setLineDash([]);
+        }
+      }
+      
+      // 繪製邊線（雙層提高可見度）
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      ctx.strokeStyle = '#10b981';  // 綠色
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      // 繪製頂點
+      polygonPoints.forEach((point, idx) => {
+        const isFirst = idx === 0;
+        const pointRadius = isFirst ? 10 : 7;  // 起點較大
+        
+        // 外圈陰影
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, pointRadius + 2, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fill();
+        
+        // 主圓點
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
+        ctx.fillStyle = isFirst ? '#fbbf24' : '#ffffff';  // 起點用黃色
+        ctx.fill();
+        
+        // 邊框
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // 起點標記 (顯示可閉合提示)
+        if (isFirst && polygonPoints.length >= 3) {
+          ctx.fillStyle = '#10b981';
+          ctx.font = 'bold 10px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText('閉合', point.x, point.y - 14);
+        }
+      });
+      
+      // 顯示操作提示
+      if (polygonPoints.length > 0) {
+        const lastPoint = polygonPoints[polygonPoints.length - 1];
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const hintText = polygonPoints.length >= 3 
+          ? '左鍵繼續 / Enter 或點擊起點閉合 / Esc 取消'
+          : `已加 ${polygonPoints.length} 點，至少需要 3 點`;
+        ctx.fillText(hintText, lastPoint.x + 15, lastPoint.y);
+      }
+    }
+  }, [currentImage, annotations, tempPoints, tempBox, previewMask, controlPoints, editingAnnotationId, draggingPointIndex, currentTool, templateImage, templateBox, isPasting, copiedAnnotations, mousePosition, polygonPoints]);
 
   // 當選中標註時，載入控制點
   useEffect(() => {
@@ -1187,6 +1264,68 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     console.log('[confirmSegmentation] 標註建立成功');
   }, [currentImage, previewMask, currentCategoryId, categories, addAnnotation, clearTempPoints, setError]);
 
+  // 確認多邊形：將手動繪製的多邊形轉換為標註
+  const confirmPolygon = useCallback(() => {
+    console.log('[confirmPolygon] 確認多邊形, 頂點數:', polygonPoints.length);
+    
+    if (!currentImage) {
+      setError('請先選擇圖片');
+      return;
+    }
+
+    if (polygonPoints.length < 3) {
+      setError('多邊形至少需要 3 個頂點');
+      return;
+    }
+
+    if (!currentCategoryId) {
+      setError('請先選擇或新增一個類別');
+      return;
+    }
+
+    const category = categories.find(c => c.id === currentCategoryId);
+    if (!category) {
+      setError('找不到選中的類別');
+      return;
+    }
+
+    // 將多邊形轉換為遮罩
+    const width = currentImage.width;
+    const height = currentImage.height;
+    const mask = polygonToMask(polygonPoints, width, height);
+    const rle = maskToRLE(mask, width, height);
+    
+    // 計算面積
+    const area = mask.reduce((sum, val) => sum + val, 0);
+    
+    // 計算 bbox
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    for (const p of polygonPoints) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    const bbox: [number, number, number, number] = [minX, minY, maxX - minX, maxY - minY];
+
+    // 建立標註
+    addAnnotation({
+      imageId: currentImage.id,
+      categoryId: category.id,
+      categoryName: category.name,
+      segmentation: rle,
+      bbox,
+      area,
+      score: 1.0  // 手動標註分數為 1.0
+    });
+
+    // 清除多邊形頂點
+    clearPolygonPoints();
+    setError(null);
+    
+    console.log('[confirmPolygon] 多邊形標註建立成功');
+  }, [currentImage, polygonPoints, currentCategoryId, categories, addAnnotation, clearPolygonPoints, setError]);
+
   // 處理滑鼠點擊
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!currentImage) return;
@@ -1239,8 +1378,25 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       setIsDrawingBox(true);
       setBoxStart({ x, y });
       setTempBox({ x1: x, y1: y, x2: x, y2: y });
+    } else if (currentTool === 'polygon') {
+      // 手動多邊形工具：左鍵新增頂點
+      if (e.button === 0) {
+        // 檢查是否點擊到起點（閉合多邊形）
+        if (polygonPoints.length >= 3) {
+          const firstPoint = polygonPoints[0];
+          const dist = Math.sqrt((x - firstPoint.x) ** 2 + (y - firstPoint.y) ** 2);
+          const closeThreshold = 15 / scale;  // 根據縮放調整閉合閾值
+          if (dist < closeThreshold) {
+            // 點擊起點，閉合並建立標註
+            confirmPolygon();
+            return;
+          }
+        }
+        // 新增頂點
+        addPolygonPoint({ x, y });
+      }
     }
-  }, [currentImage, currentTool, screenToImage, offset, setTempBox, controlPoints, findControlPointAtPosition, findAnnotationAtPosition, selectAnnotation, deselectAll, addPointAndUpdatePreview, isPasting, confirmPaste, cancelPaste]);
+  }, [currentImage, currentTool, screenToImage, offset, setTempBox, controlPoints, findControlPointAtPosition, findAnnotationAtPosition, selectAnnotation, deselectAll, addPointAndUpdatePreview, isPasting, confirmPaste, cancelPaste, polygonPoints, scale, addPolygonPoint]);
 
   // 處理右鍵選單（禁止預設行為並處理負向點）
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1257,19 +1413,24 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     }
   }, [currentTool, currentImage, screenToImage, addPointAndUpdatePreview]);
 
-  // 鍵盤事件處理（Enter 確認分割/套用模板，Escape 取消）
+  // 鍵盤事件處理（Enter 確認分割/套用模板/確認多邊形，Escape 取消）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 點分割工具、框選工具、模板工具都可以確認/取消
+      // 點分割工具、框選工具、模板工具、多邊形工具都可以確認/取消
       const isPointTool = currentTool === 'add-point' || currentTool === 'remove-point';
       const isBoxTool = currentTool === 'box';
       const isTemplateTool = currentTool === 'template';
+      const isPolygonTool = currentTool === 'polygon';
       
-      if (!isPointTool && !isBoxTool && !isTemplateTool) return;
+      if (!isPointTool && !isBoxTool && !isTemplateTool && !isPolygonTool) return;
       
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (isTemplateTool && templateImage && templateBox && !previewMask) {
+        if (isPolygonTool && polygonPoints.length >= 3) {
+          // 多邊形工具：確認多邊形
+          console.log('[handleKeyDown] Enter 按下, 確認多邊形');
+          confirmPolygon();
+        } else if (isTemplateTool && templateImage && templateBox && !previewMask) {
           // 模板工具且已有模板但無預覽：檢查是否同圖
           if (currentImage && currentImage.id === templateImage.id) {
             console.log('[handleKeyDown] Enter 按下, 套用模板（同圖）');
@@ -1286,10 +1447,14 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       } else if (e.key === 'Escape') {
         e.preventDefault();
         console.log('[handleKeyDown] Escape 按下, 清除臨時狀態');
-        clearTempPoints();
-        setPreviewMask(null);
-        if (isTemplateTool) {
-          clearTemplate();
+        if (isPolygonTool) {
+          clearPolygonPoints();
+        } else {
+          clearTempPoints();
+          setPreviewMask(null);
+          if (isTemplateTool) {
+            clearTemplate();
+          }
         }
         setError(null);
       }
@@ -1297,7 +1462,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentTool, confirmSegmentation, clearTempPoints, setPreviewMask, setError, templateImage, templateBox, previewMask, applyTemplate, clearTemplate]);
+  }, [currentTool, confirmSegmentation, confirmPolygon, clearTempPoints, clearPolygonPoints, setPreviewMask, setError, templateImage, templateBox, previewMask, applyTemplate, clearTemplate, polygonPoints, currentImage]);
 
   // 處理滑鼠移動
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -1309,6 +1474,11 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     if (isPasting) {
       setMousePosition({ x, y });
       return;
+    }
+    
+    // 多邊形工具：更新滑鼠位置以繪製動態預覽
+    if (currentTool === 'polygon' && polygonPoints.length > 0) {
+      setMousePosition({ x, y });
     }
     
     // 拖曳控制點
@@ -1332,7 +1502,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
         y2: Math.max(boxStart.y, y)
       });
     }
-  }, [currentImage, isDragging, isDrawingBox, dragStart, boxStart, screenToImage, setTempBox, draggingPointIndex, controlPoints, isPasting]);
+  }, [currentImage, isDragging, isDrawingBox, dragStart, boxStart, screenToImage, setTempBox, draggingPointIndex, controlPoints, isPasting, currentTool, polygonPoints]);
 
   // 處理滑鼠釋放
   const handleMouseUp = useCallback(() => {
@@ -1427,6 +1597,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       case 'box': return 'tool-box';
       case 'text': return 'tool-text';
       case 'template': return 'tool-template';
+      case 'polygon': return 'tool-polygon';
       default: return '';
     }
   };

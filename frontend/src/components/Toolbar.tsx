@@ -11,7 +11,8 @@ import {
   Redo2,
   Trash2,
   Keyboard,
-  Settings
+  Settings,
+  Pentagon
 } from 'lucide-react';
 import { useAnnotationStore } from '../store/annotationStore';
 import type { AnnotationTool } from '../types';
@@ -141,6 +142,14 @@ export function Toolbar({ onUpload, onFolderUpload, onExport }: ToolbarProps) {
             icon={<Copy size={20} />}
             label="模板"
             shortcut="M"
+            currentTool={currentTool}
+            onClick={setCurrentTool}
+          />
+          <ToolButton
+            tool="polygon"
+            icon={<Pentagon size={20} />}
+            label="多邊形"
+            shortcut="P"
             currentTool={currentTool}
             onClick={setCurrentTool}
           />

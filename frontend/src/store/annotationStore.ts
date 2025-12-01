@@ -161,6 +161,10 @@ interface AnnotationStore extends AppState {
   setTextPrompt: (prompt: string) => void;
   setPreviewMask: (mask: PreviewMask | null) => void;
   
+  // 多邊形繪製操作
+  addPolygonPoint: (point: { x: number; y: number }) => void;
+  clearPolygonPoints: () => void;
+  
   // 模板操作
   setTemplateImage: (image: ImageInfo | null) => void;
   setTemplateBox: (box: BoundingBox | null) => void;
@@ -198,6 +202,7 @@ const initialState: AppState = {
   tempBox: null,
   textPrompt: '',
   previewMask: null,
+  polygonPoints: [],
   templateImage: null,
   templateBox: null,
   isPasting: false,
@@ -490,7 +495,8 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     currentTool: tool,
     tempPoints: [],
     tempBox: null,
-    previewMask: null
+    previewMask: null,
+    polygonPoints: []
   }),
   
   setConfidenceThreshold: (threshold) => set({ confidenceThreshold: threshold }),
@@ -507,6 +513,13 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
   setTextPrompt: (prompt) => set({ textPrompt: prompt }),
   
   setPreviewMask: (mask) => set({ previewMask: mask }),
+  
+  // 多邊形繪製操作
+  addPolygonPoint: (point) => set((state) => ({
+    polygonPoints: [...state.polygonPoints, point]
+  })),
+  
+  clearPolygonPoints: () => set({ polygonPoints: [] }),
   
   // 模板操作
   setTemplateImage: (image) => set({ templateImage: image }),

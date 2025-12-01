@@ -63,6 +63,10 @@ body {
   cursor: copy;
 }
 
+.annotation-canvas.tool-polygon {
+  cursor: crosshair;
+}
+
 .annotation-canvas.tool-paste {
   cursor: copy;
 }

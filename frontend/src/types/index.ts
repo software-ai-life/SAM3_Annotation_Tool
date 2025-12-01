@@ -7,7 +7,8 @@ export type AnnotationTool =
   | 'remove-point' // 減點工具
   | 'box'          // 框選工具
   | 'text'         // 文字提示工具
-  | 'template';    // 模板比對工具
+  | 'template'     // 模板比對工具
+  | 'polygon';     // 手動多邊形標註工具（不依賴 SAM3）
 
 /**
  * 點座標 (含正負標籤)
@@ -127,6 +128,7 @@ export interface AppState {
   tempBox: BoundingBox | null;
   textPrompt: string;
   previewMask: PreviewMask | null;  // 點分割預覽遮罩
+  polygonPoints: { x: number; y: number }[];  // 手動多邊形繪製的頂點
   
   // 模板狀態
   templateImage: ImageInfo | null;

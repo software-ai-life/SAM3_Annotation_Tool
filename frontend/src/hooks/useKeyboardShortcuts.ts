@@ -14,6 +14,7 @@ export const SHORTCUTS: ShortcutKey[] = [
   { key: 'b', description: '框選工具', action: 'tool-box' },
   { key: 't', description: '文字提示', action: 'tool-text' },
   { key: 'm', description: '模板比對', action: 'tool-template' },
+  { key: 'p', description: '多邊形工具', action: 'tool-polygon' },
   
   // 編輯操作
   { key: 'z', ctrlKey: true, description: '撤銷', action: 'undo' },
@@ -113,6 +114,10 @@ export function useKeyboardShortcuts({ onConfirm }: UseKeyboardShortcutsProps = 
           return;
         case 'm':
           setCurrentTool('template');
+          event.preventDefault();
+          return;
+        case 'p':
+          setCurrentTool('polygon');
           event.preventDefault();
           return;
       }
