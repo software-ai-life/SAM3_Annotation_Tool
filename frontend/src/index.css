@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* 大地色系 */
+  --color-primary: #8B7355;       /* 深棕色 */
+  --color-primary-dark: #6B5344;  /* 更深棕色 */
+  --color-primary-light: #A68B6A; /* 淺棕色 */
+  --color-secondary: #C4A77D;     /* 卡其色 */
+  --color-accent: #D4A574;        /* 焦糖色 */
+  --color-success: #7D9B76;       /* 橄欖綠 */
+  --color-danger: #B85C5C;        /* 暗紅棕 */
+  --color-warning: #C9A227;       /* 土黃色 */
+  --color-neutral: #9C8B7A;       /* 灰棕色 */
+  
+  /* 背景色 */
+  --color-bg-cream: #FAF6F1;      /* 米白色 */
+  --color-bg-beige: #F5EDE4;      /* 米色 */
+  --color-bg-sand: #E8DFD4;       /* 沙色 */
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(135deg, var(--color-bg-cream) 0%, var(--color-bg-beige) 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Canvas styles */
+.annotation-canvas {
+  cursor: crosshair;
+}
+
+.annotation-canvas.tool-pointer {
+  cursor: default;
+}
+
+.annotation-canvas.tool-add-point {
+  cursor: crosshair;
+}
+
+.annotation-canvas.tool-remove-point {
+  cursor: not-allowed;
+}
+
+.annotation-canvas.tool-box {
+  cursor: crosshair;
+}
+
+.annotation-canvas.tool-text {
+  cursor: text;
+}
+
+.annotation-canvas.tool-template {
+  cursor: copy;
+}
+
+/* Keyboard shortcuts tooltip */
+.kbd {
+  @apply inline-flex items-center justify-center px-2 py-1 text-xs font-medium text-gray-800 bg-gray-100 border border-gray-300 rounded;
+}
+
+/* Animation for mask overlay */
+@keyframes pulse-mask {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.mask-preview {
+  animation: pulse-mask 1.5s ease-in-out infinite;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}

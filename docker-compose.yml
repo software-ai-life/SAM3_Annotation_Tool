@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  sam3-annotation:
+    build: .
+    container_name: sam3_anno
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ports:
+      - "5341:5341"
+    volumes:
+      # Mount for Hugging Face cache (for SAM3 model weights)
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      # Mount for uploaded images persistence
+      - ./data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
