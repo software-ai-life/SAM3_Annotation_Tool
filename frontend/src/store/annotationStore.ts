@@ -58,6 +58,8 @@ interface AnnotationStore extends AppState {
   deselectAll: () => void;
   selectAll: () => void;
   toggleAnnotationVisibility: (id: string) => void;
+  copySelectedAnnotations: () => void;
+  pasteAnnotations: () => void;
   
   // 工具操作
   setCurrentTool: (tool: AnnotationTool) => void;
@@ -99,6 +101,7 @@ const initialState: AppState = {
   images: [],
   annotations: [],
   selectedAnnotationIds: [],
+  copiedAnnotations: [],
   currentTool: 'pointer',
   confidenceThreshold: 0.5,
   tempPoints: [],
@@ -269,6 +272,59 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
       ann.id === id ? { ...ann, visible: !ann.visible } : ann
     )
   })),
+  
+  // 複製選中的標註
+  copySelectedAnnotations: () => {
+    const state = get();
+    const selectedAnnotations = state.annotations.filter(
+      ann => state.selectedAnnotationIds.includes(ann.id)
+    );
+    if (selectedAnnotations.length > 0) {
+      set({ copiedAnnotations: selectedAnnotations });
+      console.log(`[copySelectedAnnotations] 複製了 ${selectedAnnotations.length} 個標註`);
+    }
+  },
+  
+  // 貼上標註到當前圖片
+  pasteAnnotations: () => {
+    const state = get();
+    const { copiedAnnotations, currentImage, annotations } = state;
+    
+    if (copiedAnnotations.length === 0 || !currentImage) {
+      console.log('[pasteAnnotations] 沒有可貼上的標註或沒有當前圖片');
+      return;
+    }
+    
+    // 計算偏移量（同圖片時稍微偏移避免完全重疊）
+    const isSameImage = copiedAnnotations[0].imageId === currentImage.id;
+    const offset = isSameImage ? 20 : 0;
+    
+    const newAnnotations = copiedAnnotations.map((ann, index) => {
+      // 調整 bbox（偏移位置）
+      const newBbox: [number, number, number, number] = [
+        ann.bbox[0] + offset,
+        ann.bbox[1] + offset,
+        ann.bbox[2],
+        ann.bbox[3]
+      ];
+      
+      return {
+        ...ann,
+        id: `ann_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`,
+        imageId: currentImage.id,
+        bbox: newBbox,
+        selected: false
+      };
+    });
+    
+    set({
+      annotations: [...annotations, ...newAnnotations],
+      selectedAnnotationIds: newAnnotations.map(ann => ann.id)
+    });
+    
+    console.log(`[pasteAnnotations] 貼上了 ${newAnnotations.length} 個標註到圖片 ${currentImage.id}`);
+    get().saveToHistory();
+  },
   
   // 工具操作
   setCurrentTool: (tool) => set({ 

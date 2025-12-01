@@ -116,6 +116,7 @@ export interface AppState {
   // 標註狀態
   annotations: Annotation[];
   selectedAnnotationIds: string[];
+  copiedAnnotations: Annotation[];  // 複製的標註
   
   // 工具狀態
   currentTool: AnnotationTool;

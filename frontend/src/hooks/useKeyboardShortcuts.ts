@@ -44,6 +44,8 @@ export const SHORTCUTS: ShortcutKey[] = [
   
   // 其他
   { key: 's', ctrlKey: true, description: '儲存/導出', action: 'save' },
+  { key: 'c', ctrlKey: true, description: '複製選中標註', action: 'copy' },
+  { key: 'v', ctrlKey: true, description: '貼上標註', action: 'paste' },
   { key: '?', description: '顯示快捷鍵', action: 'show-shortcuts' },
   { key: '/', ctrlKey: true, description: '顯示快捷鍵', action: 'show-shortcuts' },
 ];
@@ -66,7 +68,9 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
     setCurrentCategoryId,
     categories,
     toggleShortcuts,
-    currentTool
+    currentTool,
+    copySelectedAnnotations,
+    pasteAnnotations
   } = useAnnotationStore();
 
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
@@ -137,6 +141,14 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
           onSave?.();
           event.preventDefault();
           return;
+        case 'c':
+          copySelectedAnnotations();
+          event.preventDefault();
+          return;
+        case 'v':
+          pasteAnnotations();
+          event.preventDefault();
+          return;
         case '/':
           toggleShortcuts();
           event.preventDefault();
@@ -167,8 +179,9 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
       return;
     }
 
-    // 確認操作
-    if (key === 'Enter' || key === ' ') {
+    // 確認操作 - Enter 鍵由 AnnotationCanvas 處理（避免重複觸發）
+    // 這裡只處理空白鍵
+    if (key === ' ') {
       if (currentTool !== 'pointer') {
         onConfirm?.();
         event.preventDefault();
@@ -208,6 +221,8 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
     categories,
     toggleShortcuts,
     currentTool,
+    copySelectedAnnotations,
+    pasteAnnotations,
     onConfirm,
     onSave
   ]);

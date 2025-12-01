@@ -167,53 +167,37 @@ class SAM3Wrapper:
                     "point_coords": point_coords,
                     "point_labels": point_labels,
                     "normalize_coords": True,  # We're providing pixel coordinates, let SAM normalize them
+                    "multimask_output": False,  # Always return single best mask
                 }
                 
-                # For first prediction or single point, use multimask_output=True to get options
-                # For refinement with mask_input, use multimask_output=False for deterministic result
+                # Add mask_input for refinement if available
                 if mask_input is not None:
                     predict_kwargs["mask_input"] = mask_input
-                    predict_kwargs["multimask_output"] = False
-                else:
-                    predict_kwargs["multimask_output"] = True
                 
                 # Use predict_inst method which wraps inst_interactive_predictor
                 masks, iou_scores, low_res_masks = self.processor.model.predict_inst(**predict_kwargs)
                 
                 print(f"[segment_with_points] Got {len(masks)} masks, scores: {iou_scores}")
                 
-                # Store the best mask's logits for next refinement
+                # Store the mask's logits for next refinement
                 if len(low_res_masks) > 0:
-                    best_idx = np.argmax(iou_scores) if len(iou_scores) > 1 else 0
-                    # low_res_masks shape is typically (N, 1, H, W), we want (1, H, W) for mask_input
-                    best_logits = low_res_masks[best_idx:best_idx+1]
-                    self.mask_logits[image_id] = best_logits
-                    print(f"[segment_with_points] Stored mask logits, shape: {best_logits.shape}")
+                    self.mask_logits[image_id] = low_res_masks[0:1]  # Keep first (only) mask
+                    print(f"[segment_with_points] Stored mask logits, shape: {low_res_masks[0:1].shape}")
                 
-                # Process results - return the best mask (highest IoU score)
+                # Process the single returned mask
                 results = []
-                
-                # Find the best mask index
-                best_idx = np.argmax(iou_scores) if len(iou_scores) > 0 else 0
-                
-                for i in range(len(masks)):
-                    mask = masks[i]
-                    score = float(iou_scores[i]) if i < len(iou_scores) else 0.0
-                    
-                    # Only include results above threshold, but always include the best one
-                    if score < confidence_threshold and i != best_idx:
-                        continue
+                if len(masks) > 0:
+                    mask = masks[0]
+                    score = float(iou_scores[0]) if len(iou_scores) > 0 else 0.0
                     
                     # Convert to binary mask
                     binary_mask = (mask > 0).astype(np.uint8)
                     
                     # Calculate bounding box
                     ys, xs = np.where(binary_mask > 0)
-                    if len(xs) == 0 or len(ys) == 0:
-                        continue
-                    
-                    x1, x2 = int(xs.min()), int(xs.max())
-                    y1, y2 = int(ys.min()), int(ys.max())
+                    if len(xs) > 0 and len(ys) > 0:
+                        x1, x2 = int(xs.min()), int(xs.max())
+                        y1, y2 = int(ys.min()), int(ys.max())
                     box = [x1, y1, x2, y2]
                     
                     # Convert to RLE
@@ -227,10 +211,7 @@ class SAM3Wrapper:
                         "area": area
                     })
                 
-                # Sort by score (highest first)
-                results.sort(key=lambda x: x["score"], reverse=True)
-                
-                print(f"[segment_with_points] Returning {len(results)} results after filtering")
+                print(f"[segment_with_points] Returning best mask with score: {score:.3f}")
                 return results
                 
             except Exception as e:

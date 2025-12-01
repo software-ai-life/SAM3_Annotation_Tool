@@ -1096,12 +1096,12 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       // 檢查是否點擊到遮罩
       const clickedAnnotationId = findAnnotationAtPosition(x, y);
       if (clickedAnnotationId) {
-        // 支援 Ctrl/Cmd 多選
-        selectAnnotation(clickedAnnotationId, e.ctrlKey || e.metaKey);
+        // 支援 Ctrl/Cmd/Shift 多選
+        selectAnnotation(clickedAnnotationId, e.ctrlKey || e.metaKey || e.shiftKey);
         return;
       } else {
         // 點擊空白處取消選取
-        if (!e.ctrlKey && !e.metaKey) {
+        if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
           deselectAll();
         }
       }

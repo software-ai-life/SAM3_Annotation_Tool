@@ -323,7 +323,7 @@ export function AnnotationList() {
                       <div
                         key={ann.id}
                         onClick={(e) => {
-                          selectAnnotation(ann.id, e.ctrlKey || e.metaKey);
+                          selectAnnotation(ann.id, e.ctrlKey || e.metaKey || e.shiftKey);
                         }}
                         className={`
                           flex items-center gap-2 p-2.5 rounded-xl cursor-pointer text-sm transition-all
