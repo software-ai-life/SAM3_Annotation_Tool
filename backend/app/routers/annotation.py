@@ -168,7 +168,7 @@ async def segment_with_box(request: BoxPromptRequest):
 
 @router.post("/segment/template", response_model=SegmentationResponse)
 async def segment_with_template(request: TemplatePromptRequest):
-    """Segment image using template matching"""
+    """Segment image using visual prompt (box as exemplar)"""
     try:
         template_box = (
             request.template_box.x1,

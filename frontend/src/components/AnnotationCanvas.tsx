@@ -358,6 +358,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     selectAnnotation,
     deselectAll,
     addAnnotation,
+    addAnnotations,
     categories,
     currentCategoryId,
     confidenceThreshold,
@@ -959,7 +960,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     console.log('[saveTemplate] 模板已儲存, imageId:', currentImage.id);
   }, [currentImage, setTemplateImage, setTemplateBox, setTempBox, setError]);
 
-  // 套用模板：在當前圖片上搜尋與模板相似的物體
+  // 套用模板：在當前圖片上搜尋與模板相似的物體（批次偵測）
   const applyTemplate = useCallback(async () => {
     console.log('[applyTemplate] 套用模板');
     
@@ -998,14 +999,27 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       console.log('[applyTemplate] 結果:', results.length, '個分割');
 
       if (results.length > 0) {
-        // 顯示最佳結果作為預覽
-        const best = results.reduce((a, b) => a.score > b.score ? a : b);
-        setPreviewMask({
-          mask_rle: best.mask_rle,
-          box: best.box,
-          score: best.score,
-          area: best.area
-        });
+        // 獲取當前類別資訊
+        const category = categories.find(c => c.id === currentCategoryId);
+        const categoryName = category?.name || 'object';
+
+        // 將所有結果轉換為標註並批次添加
+        const annotationsToAdd = results.map(result => ({
+          imageId: currentImage.id,
+          categoryId: currentCategoryId,
+          categoryName,
+          segmentation: result.mask_rle,
+          bbox: result.box as [number, number, number, number],
+          score: result.score,
+          area: result.area,
+        }));
+
+        addAnnotations(annotationsToAdd);
+        
+        // 清除預覽
+        setPreviewMask(null);
+        
+        console.log(`[applyTemplate] 已添加 ${results.length} 個標註`);
       } else {
         setError('未找到相似物體');
         setPreviewMask(null);
@@ -1016,7 +1030,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     } finally {
       setLoading(false);
     }
-  }, [currentImage, templateImage, templateBox, currentCategoryId, confidenceThreshold, setLoading, setError, setPreviewMask]);
+  }, [currentImage, templateImage, templateBox, currentCategoryId, categories, confidenceThreshold, setLoading, setError, setPreviewMask, addAnnotations]);
 
   // 清除模板
   const clearTemplate = useCallback(() => {
@@ -1136,9 +1150,14 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       if (e.key === 'Enter') {
         e.preventDefault();
         if (isTemplateTool && templateImage && templateBox && !previewMask) {
-          // 模板工具且已有模板但無預覽：套用模板
-          console.log('[handleKeyDown] Enter 按下, 套用模板');
-          applyTemplate();
+          // 模板工具且已有模板但無預覽：檢查是否同圖
+          if (currentImage && currentImage.id === templateImage.id) {
+            console.log('[handleKeyDown] Enter 按下, 套用模板（同圖）');
+            applyTemplate();
+          } else {
+            console.log('[handleKeyDown] 跨圖模板不支援');
+            setError('模板功能僅支援同圖檢測。跨圖請使用「文字工具」。');
+          }
         } else if (previewMask) {
           // 有預覽遮罩：確認分割
           console.log('[handleKeyDown] Enter 按下, 確認分割');

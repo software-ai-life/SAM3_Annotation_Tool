@@ -343,40 +343,66 @@ class SAM3Wrapper:
         template_box: Tuple[float, float, float, float],
         confidence_threshold: float = 0.5
     ) -> List[Dict]:
-        """Segment image using template matching (visual exemplar)"""
+        """Segment image using visual prompt (bounding box as exemplar)
+        
+        Uses SAM3's add_geometric_prompt to find objects at the specified location.
+        
+        IMPORTANT: This only works for SAME IMAGE detection.
+        For cross-image detection, the box coordinates would be meaningless
+        since SAM3's geometric prompt specifies WHERE to look, not WHAT to look for.
+        
+        Args:
+            image_id: Target image to segment
+            template_image_id: Source image with template (must be same as image_id)
+            template_box: Bounding box of the exemplar object (x1, y1, x2, y2 in pixels)
+            confidence_threshold: Minimum confidence score for results
+        """
         if image_id not in self.image_states:
             raise ValueError(f"Image {image_id} not found.")
         if template_image_id not in self.images:
             raise ValueError(f"Template image {template_image_id} not found.")
         
-        # Extract template region
-        template_image = self.images[template_image_id]
-        x1, y1, x2, y2 = template_box
-        template_region = template_image.crop((int(x1), int(y1), int(x2), int(y2)))
+        # Check if this is cross-image detection
+        if image_id != template_image_id:
+            raise ValueError(
+                "跨圖模板檢測目前不支援。SAM3 的 Visual Prompt 是指定位置分割，"
+                "無法在不同圖片間尋找相似物體。請使用「文字工具」來跨圖檢測相似物體。"
+            )
         
         if self.sam3_available and self.processor:
-            # Use geometric prompt with the template region
+            # Use fresh copy of state for template detection
             state = self.image_states[image_id].copy()
             self.processor.set_confidence_threshold(confidence_threshold)
             
-            # SAM3 supports visual prompts through geometric prompts
-            # We use the template box as a reference
-            image = self.images[image_id]
-            w, h = image.width, image.height
+            # Get image dimensions for normalization (same image, so use template image)
+            template_image = self.images[template_image_id]
+            w, h = template_image.width, template_image.height
             
-            cx = ((x1 + x2) / 2) / template_image.width
-            cy = ((y1 + y2) / 2) / template_image.height
-            bw = abs(x2 - x1) / template_image.width
-            bh = abs(y2 - y1) / template_image.height
+            x1, y1, x2, y2 = template_box
+            
+            # Convert to center format and normalize to [0, 1]
+            # Box format: [center_x, center_y, width, height] normalized
+            cx = ((x1 + x2) / 2) / w
+            cy = ((y1 + y2) / 2) / h
+            bw = abs(x2 - x1) / w
+            bh = abs(y2 - y1) / h
             
             box_normalized = [cx, cy, bw, bh]
+            print(f"[segment_with_template] Using geometric prompt (visual exemplar)")
+            print(f"  Box pixels: ({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f})")
+            print(f"  Box normalized: {box_normalized}")
+            print(f"  Image size: {w}x{h}")
+            
             state = self.processor.add_geometric_prompt(
                 box=box_normalized,
                 label=True,
                 state=state
             )
             
-            return self._process_results(state, image_id)
+            results = self._process_results(state, image_id)
+            print(f"[segment_with_template] Found {len(results)} results")
+            
+            return results
         else:
             return self._generate_mock_results(image_id)
     

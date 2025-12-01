@@ -14,11 +14,14 @@ export function TemplateIndicator() {
     currentTool,
     currentImage,
     confidenceThreshold,
+    currentCategoryId,
+    categories,
     setTemplateImage,
     setTemplateBox,
     setPreviewMask,
     setLoading,
     setError,
+    addAnnotations,
   } = useAnnotationStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -73,11 +76,17 @@ export function TemplateIndicator() {
     setTemplateBox(null);
   };
 
-  // 套用模板
+  // 套用模板 - 批次偵測並添加所有相似物體（僅支援同圖）
   const applyTemplate = useCallback(async () => {
     if (!currentImage || !templateImage || !templateBox) return;
     if (currentImage.isLocalOnly) {
       setError('請先確保圖片已上傳至後端');
+      return;
+    }
+    
+    // 檢查是否同圖
+    if (currentImage.id !== templateImage.id) {
+      setError('模板功能僅支援同圖檢測。跨圖請使用「文字工具」。');
       return;
     }
 
@@ -92,14 +101,32 @@ export function TemplateIndicator() {
         confidenceThreshold
       );
 
+      console.log(`[applyTemplate] 找到 ${results.length} 個相似物體`);
+
       if (results.length > 0) {
-        const best = results.reduce((a, b) => a.score > b.score ? a : b);
-        setPreviewMask({
-          mask_rle: best.mask_rle,
-          box: best.box,
-          score: best.score,
-          area: best.area
-        });
+        // 獲取當前類別資訊
+        const category = categories.find(c => c.id === currentCategoryId);
+        const categoryName = category?.name || 'object';
+
+        // 將所有結果轉換為標註
+        const annotationsToAdd = results.map(result => ({
+          imageId: currentImage.id,
+          categoryId: currentCategoryId,
+          categoryName,
+          segmentation: result.mask_rle,
+          bbox: result.box as [number, number, number, number],
+          score: result.score,
+          area: result.area,
+        }));
+
+        // 批次添加所有標註
+        addAnnotations(annotationsToAdd);
+        
+        // 清除預覽
+        setPreviewMask(null);
+        
+        // 顯示成功訊息
+        console.log(`[applyTemplate] 已添加 ${results.length} 個標註`);
       } else {
         setError('未找到相似物體');
         setPreviewMask(null);
@@ -109,7 +136,7 @@ export function TemplateIndicator() {
     } finally {
       setLoading(false);
     }
-  }, [currentImage, templateImage, templateBox, confidenceThreshold, setLoading, setError, setPreviewMask]);
+  }, [currentImage, templateImage, templateBox, confidenceThreshold, currentCategoryId, categories, setLoading, setError, setPreviewMask, addAnnotations]);
 
   // 只在模板工具啟用時顯示
   if (currentTool !== 'template') {
@@ -152,11 +179,17 @@ export function TemplateIndicator() {
               <span className="text-xs text-stone-500">
                 {Math.round(templateBox.x2 - templateBox.x1)} × {Math.round(templateBox.y2 - templateBox.y1)} px
               </span>
+              {/* 跨圖提示 */}
+              {currentImage && currentImage.id !== templateImage.id && (
+                <span className="text-xs text-amber-600 font-medium">
+                  ⚠️ 跨圖檢測請用文字工具
+                </span>
+              )}
             </div>
 
             {/* 操作按鈕 */}
             <div className="flex gap-2 ml-2">
-              {currentImage && currentImage.id !== templateImage.id && (
+              {currentImage && currentImage.id === templateImage.id && (
                 <button
                   onClick={applyTemplate}
                   className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-all text-sm font-medium"
@@ -195,8 +228,8 @@ export function TemplateIndicator() {
         <div className="border-l border-purple-200 pl-4 ml-2">
           <div className="text-xs text-stone-500 leading-relaxed">
             <p><strong>1.</strong> 框選物體建立模板</p>
-            <p><strong>2.</strong> 切換到其他圖片</p>
-            <p><strong>3.</strong> 按 <kbd className="px-1 py-0.5 bg-stone-200 rounded text-xs">Enter</kbd> 搜尋相似物體</p>
+            <p><strong>2.</strong> 按 <kbd className="px-1 py-0.5 bg-stone-200 rounded text-xs">Enter</kbd> 搜尋相似物體</p>
+            <p className="text-amber-600">⚠️ 僅支援同圖檢測</p>
           </div>
         </div>
       </div>

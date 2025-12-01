@@ -44,10 +44,10 @@ class BoxPromptRequest(BaseModel):
 
 
 class TemplatePromptRequest(BaseModel):
-    """Request for template-based segmentation"""
+    """Request for template-based segmentation using visual prompt (box as exemplar)"""
     image_id: str
     template_image_id: str  # Reference image containing the template
-    template_box: Box  # Region in the template image
+    template_box: Box  # Region in the template image (bounding box of exemplar)
     confidence_threshold: float = 0.5
 
 
