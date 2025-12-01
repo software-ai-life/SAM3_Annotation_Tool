@@ -1,6 +1,6 @@
 import { useEffect, useCallback } from 'react';
 import { useAnnotationStore } from '../store/annotationStore';
-import type { AnnotationTool, ShortcutKey } from '../types';
+import type { ShortcutKey } from '../types';
 
 /**
  * 快捷鍵配置
@@ -43,7 +43,6 @@ export const SHORTCUTS: ShortcutKey[] = [
   { key: '9', description: '選擇類別 9', action: 'category-9' },
   
   // 其他
-  { key: 's', ctrlKey: true, description: '儲存/導出', action: 'save' },
   { key: 'c', ctrlKey: true, description: '複製選中標註', action: 'copy' },
   { key: 'v', ctrlKey: true, description: '貼上標註', action: 'paste' },
   { key: '?', description: '顯示快捷鍵', action: 'show-shortcuts' },
@@ -52,10 +51,9 @@ export const SHORTCUTS: ShortcutKey[] = [
 
 interface UseKeyboardShortcutsProps {
   onConfirm?: () => void;
-  onSave?: () => void;
 }
 
-export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcutsProps = {}) {
+export function useKeyboardShortcuts({ onConfirm }: UseKeyboardShortcutsProps = {}) {
   const {
     setCurrentTool,
     undo,
@@ -137,10 +135,6 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
           return;
         case 'd':
           deselectAll();
-          event.preventDefault();
-          return;
-        case 's':
-          onSave?.();
           event.preventDefault();
           return;
         case 'c':
@@ -233,8 +227,7 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
     startPasting,
     cancelPaste,
     isPasting,
-    onConfirm,
-    onSave
+    onConfirm
   ]);
 
   useEffect(() => {

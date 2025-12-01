@@ -567,26 +567,48 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
         
         // 選中時繪製控制點
         if (ann.selected && editingAnnotationId === ann.id && controlPoints.length > 0) {
-          // 繪製多邊形輪廓
+          // 繪製多邊形輪廓（使用對比色）
           ctx.beginPath();
           ctx.moveTo(controlPoints[0].x, controlPoints[0].y);
           for (let i = 1; i < controlPoints.length; i++) {
             ctx.lineTo(controlPoints[i].x, controlPoints[i].y);
           }
           ctx.closePath();
-          ctx.strokeStyle = ann.color;
+          // 使用白色外框 + 黑色內框增加可見度
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 4;
+          ctx.stroke();
+          ctx.strokeStyle = '#000000';
           ctx.lineWidth = 2;
           ctx.stroke();
           
-          // 繪製控制點
+          // 繪製控制點（增大尺寸，使用高對比色）
           controlPoints.forEach((point, idx) => {
+            const isActive = draggingPointIndex === idx;
+            const pointRadius = isActive ? 10 : 8;
+            
+            // 外圈（黑色陰影效果）
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
-            ctx.fillStyle = draggingPointIndex === idx ? '#ffffff' : ann.color;
+            ctx.arc(point.x, point.y, pointRadius + 2, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
             ctx.fill();
-            ctx.strokeStyle = '#ffffff';
+            
+            // 主圓點（亮色填充）
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
+            ctx.fillStyle = isActive ? '#fbbf24' : '#ffffff';  // 黃色表示正在拖曳
+            ctx.fill();
+            
+            // 內圈邊框（深色）
+            ctx.strokeStyle = '#1f2937';
             ctx.lineWidth = 2;
             ctx.stroke();
+            
+            // 中心小點（標示位置）
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = '#1f2937';
+            ctx.fill();
           });
         } else if (ann.selected) {
           // 顯示邊界框和編輯提示

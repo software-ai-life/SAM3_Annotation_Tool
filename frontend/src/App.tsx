@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { Toolbar } from './components/Toolbar';
 import { AnnotationCanvas } from './components/AnnotationCanvas';
 import { AnnotationList } from './components/AnnotationList';
@@ -6,21 +6,32 @@ import { TextPromptPanel } from './components/TextPromptPanel';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { ImageNavigator } from './components/ImageNavigator';
 import { TemplateIndicator } from './components/TemplateIndicator';
+import { RecoveryModal } from './components/RecoveryModal';
+import { AutoSaveIndicator } from './components/AutoSaveIndicator';
 import { useAnnotationStore } from './store/annotationStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useAutoSave, getAutoSaveData, clearAutoSaveData, matchAndRestoreAnnotations } from './hooks/useAutoSave';
 import * as api from './services/api';
-import type { SegmentationResult } from './types';
+import type { SegmentationResult, ImageInfo, AutoSaveData } from './types';
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   
+  // 恢復模式狀態
+  const [pendingRecovery, setPendingRecovery] = useState<AutoSaveData | null>(null);
+  
   const {
     currentImage,
     addImages,
+    setImages,
+    setCurrentImage,
     addAnnotations,
+    setAnnotations,
     currentCategoryId,
+    setCurrentCategoryId,
     categories,
+    setCategories,
     tempPoints,
     tempBox,
     textPrompt,
@@ -34,6 +45,17 @@ function App() {
     images,
     annotations
   } = useAnnotationStore();
+
+  // 啟用自動暫存
+  const { lastSavedAt, isSaving } = useAutoSave();
+
+  // 檢查是否有暫存資料需要恢復
+  useEffect(() => {
+    const autoSaveData = getAutoSaveData();
+    if (autoSaveData && autoSaveData.annotations.length > 0) {
+      setPendingRecovery(autoSaveData);
+    }
+  }, []);
 
   // 處理分割結果
   const handleSegmentationResults = useCallback((results: SegmentationResult[]) => {
@@ -182,13 +204,18 @@ function App() {
       return;
     }
     
+    setLoading(true);
+    
     try {
       const cocoData = await api.exportCOCO(images, annotations, categories);
-      api.downloadCOCOJSON(cocoData, 'annotations_coco.json');
+      // 導出 COCO JSON + 圖片壓縮成 ZIP
+      await api.downloadCOCOWithImages(cocoData, images, 'annotations_coco.zip');
     } catch (err: any) {
       setError(err.message || '導出失敗');
+    } finally {
+      setLoading(false);
     }
-  }, [images, annotations, categories, setError]);
+  }, [images, annotations, categories, setLoading, setError]);
 
   // 處理上傳
   const handleUpload = useCallback(() => {
@@ -234,10 +261,88 @@ function App() {
     e.target.value = '';
   }, [addImages, setLoading, setError]);
 
+  // 處理恢復暫存資料
+  const handleRecovery = useCallback(async (files: FileList) => {
+    if (!pendingRecovery) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // 上傳圖片
+      const uploadedImages: ImageInfo[] = [];
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith('image/')) continue;
+        const imageInfo = await api.uploadImage(file);
+        uploadedImages.push(imageInfo);
+      }
+      
+      if (uploadedImages.length === 0) {
+        setError('沒有找到有效的圖片檔案');
+        setLoading(false);
+        return;
+      }
+      
+      // 比對並恢復標註
+      const result = matchAndRestoreAnnotations(
+        pendingRecovery,
+        uploadedImages.map(img => ({
+          id: img.id,
+          fileName: img.fileName,
+          width: img.width,
+          height: img.height
+        }))
+      );
+      
+      // 設定圖片
+      setImages(uploadedImages);
+      
+      // 設定類別
+      if (result.matchedCategories.length > 0) {
+        setCategories(result.matchedCategories);
+        setCurrentCategoryId(pendingRecovery.currentCategoryId || result.matchedCategories[0].id);
+      }
+      
+      // 設定標註
+      if (result.matchedAnnotations.length > 0) {
+        setAnnotations(result.matchedAnnotations);
+      }
+      
+      // 設定當前圖片
+      if (result.currentImageId) {
+        const targetImage = uploadedImages.find(img => img.id === result.currentImageId);
+        if (targetImage) {
+          setCurrentImage(targetImage);
+        }
+      }
+      
+      // 顯示恢復結果
+      if (result.unmatchedCount > 0) {
+        setError(`已恢復 ${result.matchedCount} 個標註，${result.unmatchedCount} 個標註因圖片不符無法恢復`);
+      } else {
+        console.log(`[Recovery] 成功恢復 ${result.matchedCount} 個標註`);
+      }
+      
+      // 清除暫存和恢復狀態
+      clearAutoSaveData();
+      setPendingRecovery(null);
+      
+    } catch (err: any) {
+      setError(err.message || '恢復失敗');
+    } finally {
+      setLoading(false);
+    }
+  }, [pendingRecovery, setImages, setAnnotations, setCategories, setCurrentCategoryId, setCurrentImage, setLoading, setError]);
+
+  // 處理捨棄暫存資料
+  const handleDiscardRecovery = useCallback(() => {
+    clearAutoSaveData();
+    setPendingRecovery(null);
+  }, []);
+
   // 設置快捷鍵
   useKeyboardShortcuts({
-    onConfirm: handleConfirm,
-    onSave: handleExport
+    onConfirm: handleConfirm
   });
 
   return (
@@ -265,7 +370,7 @@ function App() {
       <Toolbar 
         onUpload={handleUpload} 
         onFolderUpload={handleFolderUpload}
-        onExport={handleExport} 
+        onExport={handleExport}
       />
 
       {/* 圖片導航列 */}
@@ -285,6 +390,9 @@ function App() {
       
       {/* 模板狀態指示器 */}
       <TemplateIndicator />
+      
+      {/* 自動暫存狀態指示器 */}
+      <AutoSaveIndicator lastSavedAt={lastSavedAt} isSaving={isSaving} />
       
       {/* 載入指示器 */}
       {isLoading && (
@@ -313,6 +421,15 @@ function App() {
       
       {/* 快捷鍵說明彈窗 */}
       <ShortcutsModal />
+      
+      {/* 恢復暫存資料對話框 */}
+      {pendingRecovery && (
+        <RecoveryModal
+          autoSaveData={pendingRecovery}
+          onRecover={handleRecovery}
+          onDiscard={handleDiscardRecovery}
+        />
+      )}
     </div>
   );
 }

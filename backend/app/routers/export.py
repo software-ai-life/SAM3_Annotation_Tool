@@ -65,9 +65,9 @@ def convert_to_coco_format(export_data: ExportRequest) -> Dict[str, Any]:
             "height": img["height"]
         })
     
-    # Process categories
+    # Process categories (COCO category_id 從 0 開始)
     category_id_map = {}
-    for idx, cat in enumerate(export_data.categories, start=1):
+    for idx, cat in enumerate(export_data.categories, start=0):
         category_id_map[cat.get("id", idx)] = idx
         coco_output["categories"].append({
             "id": idx,

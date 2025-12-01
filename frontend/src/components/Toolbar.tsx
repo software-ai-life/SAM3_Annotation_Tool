@@ -95,7 +95,7 @@ export function Toolbar({ onUpload, onFolderUpload, onExport }: ToolbarProps) {
           <button
             onClick={onExport}
             className="flex items-center gap-2 px-4 py-2.5 bg-stone-700 text-stone-50 rounded-xl hover:bg-stone-800 transition-all shadow-md shadow-stone-300 hover:shadow-lg hover:shadow-stone-400"
-            title="導出 COCO JSON (Ctrl+S)"
+            title="導出 COCO JSON"
           >
             <Download size={18} />
             <span className="text-sm font-medium">導出</span>

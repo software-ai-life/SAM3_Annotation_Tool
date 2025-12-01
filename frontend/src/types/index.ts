@@ -163,6 +163,44 @@ export interface ShortcutKey {
 }
 
 /**
+ * 專案儲存格式（用於儲存/載入完整專案狀態）
+ */
+export interface ProjectData {
+  version: string;  // 專案格式版本
+  savedAt: string;  // 儲存時間 ISO 格式
+  images: Array<{
+    id: string;
+    fileName: string;
+    width: number;
+    height: number;
+    url: string;  // base64 data URL
+  }>;
+  annotations: Annotation[];
+  categories: Category[];
+  currentImageId: string | null;
+  currentCategoryId: number;
+}
+
+/**
+ * 自動暫存格式（不含圖片資料，只存 metadata）
+ */
+export interface AutoSaveData {
+  version: string;
+  savedAt: string;
+  images: Array<{
+    id: string;
+    fileName: string;
+    width: number;
+    height: number;
+    // 不存 url，恢復時需重新選擇圖片
+  }>;
+  annotations: Annotation[];
+  categories: Category[];
+  currentImageFileName: string | null;  // 用檔名而非 id，方便比對
+  currentCategoryId: number;
+}
+
+/**
  * COCO 格式導出
  */
 export interface COCOExport {

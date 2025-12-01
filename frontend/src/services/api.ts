@@ -1,4 +1,5 @@
 import axios from 'axios';
+import JSZip from 'jszip';
 import type { 
   ImageInfo, 
   SegmentationResult, 
@@ -6,7 +7,8 @@ import type {
   BoundingBox,
   Annotation,
   Category,
-  COCOExport
+  COCOExport,
+  ProjectData
 } from '../types';
 
 const API_BASE = '/api';
@@ -304,7 +306,89 @@ export async function resetPrompts(imageId: string): Promise<void> {
 }
 
 /**
- * 下載 COCO JSON 檔案
+ * 將 Data URL 轉換為 Blob
+ */
+function dataURLtoBlob(dataURL: string): Blob {
+  const parts = dataURL.split(',');
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+}
+
+/**
+ * 取得檔案副檔名
+ */
+function getExtensionFromMime(mime: string): string {
+  const mimeToExt: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/bmp': '.bmp',
+    'image/gif': '.gif'
+  };
+  return mimeToExt[mime] || '.png';
+}
+
+/**
+ * 導出 COCO JSON 和圖片為 ZIP 檔案
+ */
+export async function downloadCOCOWithImages(
+  cocoData: COCOExport,
+  images: ImageInfo[],
+  filename: string = 'annotations_coco.zip'
+): Promise<void> {
+  const zip = new JSZip();
+  
+  // 建立 images 資料夾
+  const imagesFolder = zip.folder('images');
+  
+  // 加入 COCO JSON
+  zip.file('annotations.json', JSON.stringify(cocoData, null, 2));
+  
+  // 加入所有圖片
+  for (const img of images) {
+    if (img.url && imagesFolder) {
+      try {
+        if (img.url.startsWith('data:')) {
+          // Data URL 格式
+          const blob = dataURLtoBlob(img.url);
+          const ext = getExtensionFromMime(blob.type);
+          // 確保檔名有正確的副檔名
+          const fileName = img.fileName.includes('.') ? img.fileName : `${img.fileName}${ext}`;
+          imagesFolder.file(fileName, blob);
+        } else if (img.url.startsWith('blob:')) {
+          // Blob URL 格式 - 需要 fetch
+          const response = await fetch(img.url);
+          const blob = await response.blob();
+          const ext = getExtensionFromMime(blob.type);
+          const fileName = img.fileName.includes('.') ? img.fileName : `${img.fileName}${ext}`;
+          imagesFolder.file(fileName, blob);
+        }
+      } catch (err) {
+        console.warn(`[downloadCOCOWithImages] 無法加入圖片 ${img.fileName}:`, err);
+      }
+    }
+  }
+  
+  // 產生 ZIP 並下載
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(content);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 下載 COCO JSON 檔案（舊版，僅下載 JSON）
  */
 export function downloadCOCOJSON(cocoData: COCOExport, filename: string = 'annotations.json'): void {
   const blob = new Blob([JSON.stringify(cocoData, null, 2)], { type: 'application/json' });
@@ -316,4 +400,70 @@ export function downloadCOCOJSON(cocoData: COCOExport, filename: string = 'annot
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * 儲存專案到檔案
+ */
+export function saveProject(
+  images: ImageInfo[],
+  annotations: Annotation[],
+  categories: Category[],
+  currentImageId: string | null,
+  currentCategoryId: number
+): void {
+  const projectData: ProjectData = {
+    version: '1.0',
+    savedAt: new Date().toISOString(),
+    images: images.map(img => ({
+      id: img.id,
+      fileName: img.fileName,
+      width: img.width,
+      height: img.height,
+      url: img.url  // base64 data URL
+    })),
+    annotations: annotations.map(ann => ({
+      ...ann,
+      selected: false  // 儲存時清除選擇狀態
+    })),
+    categories,
+    currentImageId,
+    currentCategoryId
+  };
+
+  const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `project_${new Date().toISOString().slice(0, 10)}.sam3proj.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 載入專案檔案
+ */
+export async function loadProject(file: File): Promise<ProjectData> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const projectData = JSON.parse(content) as ProjectData;
+        
+        // 驗證專案格式
+        if (!projectData.version || !projectData.images || !projectData.annotations) {
+          throw new Error('無效的專案檔案格式');
+        }
+        
+        resolve(projectData);
+      } catch (err) {
+        reject(new Error('無法解析專案檔案'));
+      }
+    };
+    reader.onerror = () => reject(new Error('無法讀取檔案'));
+    reader.readAsText(file);
+  });
 }

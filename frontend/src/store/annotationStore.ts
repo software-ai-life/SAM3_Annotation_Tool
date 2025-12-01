@@ -131,11 +131,13 @@ interface AnnotationStore extends AppState {
   setCurrentImage: (image: ImageInfo | null) => void;
   addImage: (image: ImageInfo) => void;
   addImages: (images: ImageInfo[]) => void;
+  setImages: (images: ImageInfo[]) => void;  // 載入專案時使用
   removeImage: (id: string) => void;
   
   // 標註操作
   addAnnotation: (annotation: Omit<Annotation, 'id' | 'color' | 'visible' | 'selected'>) => void;
   addAnnotations: (annotations: Omit<Annotation, 'id' | 'color' | 'visible' | 'selected'>[]) => void;
+  setAnnotations: (annotations: Annotation[]) => void;  // 載入專案時使用
   updateAnnotation: (id: string, updates: Partial<Annotation>) => void;
   deleteAnnotation: (id: string) => void;
   deleteSelectedAnnotations: () => void;
@@ -168,6 +170,7 @@ interface AnnotationStore extends AppState {
   addCategory: (name: string, color?: string) => void;
   deleteCategory: (id: number) => void;
   updateCategory: (id: number, updates: Partial<Category>) => void;
+  setCategories: (categories: Category[]) => void;  // 載入專案時使用
   
   // 歷史記錄操作
   saveToHistory: () => void;
@@ -223,6 +226,16 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     images: [...state.images, ...newImages],
     currentImage: state.currentImage || newImages[0] || null
   })),
+
+  // 載入專案時使用 - 直接設定圖片列表
+  setImages: (images) => set((state) => {
+    // 清理舊的 blob URLs
+    state.images.forEach(img => revokeImageUrl(img.url));
+    return {
+      images,
+      currentImage: images[0] || null
+    };
+  }),
 
   removeImage: (id) => set((state) => {
     const removedImage = state.images.find(img => img.id === id);
@@ -292,6 +305,12 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     // 延遲保存歷史，避免阻塞 UI
     setTimeout(() => get().saveToHistory(), 100);
   },
+  
+  // 載入專案時使用 - 直接設定標註列表
+  setAnnotations: (annotations) => set({
+    annotations,
+    selectedAnnotationIds: []
+  }),
   
   updateAnnotation: (id, updates) => {
     set((state) => ({
@@ -532,6 +551,12 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
       c.id === id ? { ...c, ...updates } : c
     )
   })),
+  
+  // 載入專案時使用 - 直接設定類別列表
+  setCategories: (categories) => set({
+    categories,
+    currentCategoryId: categories[0]?.id || 0
+  }),
   
   // 歷史記錄操作
   saveToHistory: () => set((state) => {
