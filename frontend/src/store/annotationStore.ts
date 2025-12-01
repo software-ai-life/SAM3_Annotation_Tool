@@ -8,7 +8,8 @@ import type {
   ImageInfo,
   Category,
   HistoryState,
-  PreviewMask
+  PreviewMask,
+  RLEMask
 } from '../types';
 
 // 預設類別 - 空的，讓使用者自行新增
@@ -29,6 +30,90 @@ const getNextColor = (): string => {
   colorIndex++;
   return color;
 };
+
+/**
+ * 解碼 RLE 遮罩為二進制陣列
+ */
+function decodeRLE(rle: RLEMask): Uint8Array {
+  const [height, width] = rle.size;
+  const mask = new Uint8Array(height * width);
+  
+  let idx = 0;
+  let value = 0;
+  
+  for (const count of rle.counts) {
+    for (let i = 0; i < count; i++) {
+      if (idx < mask.length) {
+        mask[idx] = value;
+        idx++;
+      }
+    }
+    value = 1 - value;
+  }
+  
+  return mask;
+}
+
+/**
+ * 編碼二進制陣列為 RLE 遮罩
+ */
+function encodeRLE(mask: Uint8Array, width: number, height: number): RLEMask {
+  const counts: number[] = [];
+  let currentValue = 0;
+  let currentCount = 0;
+  
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i] === currentValue) {
+      currentCount++;
+    } else {
+      counts.push(currentCount);
+      currentValue = mask[i];
+      currentCount = 1;
+    }
+  }
+  counts.push(currentCount);
+  
+  return {
+    counts,
+    size: [height, width]
+  };
+}
+
+/**
+ * 偏移 RLE 遮罩
+ * 與 drawMask 使用相同的索引方式：idx 直接對應線性陣列索引
+ * imageData 是 row-major：idx = y * width + x
+ */
+function offsetRLE(rle: RLEMask, offsetX: number, offsetY: number): RLEMask {
+  const [height, width] = rle.size;
+  const mask = decodeRLE(rle);
+  
+  // 建立新的遮罩陣列
+  const newMask = new Uint8Array(height * width);
+  
+  const dx = Math.round(offsetX);
+  const dy = Math.round(offsetY);
+  
+  // 遍歷原始遮罩，將每個像素移動到新位置
+  // imageData 使用 row-major：idx = y * width + x
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const oldIdx = y * width + x;
+      if (mask[oldIdx] === 1) {
+        const newX = x + dx;
+        const newY = y + dy;
+        
+        // 檢查新位置是否在範圍內
+        if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
+          const newIdx = newY * width + newX;
+          newMask[newIdx] = 1;
+        }
+      }
+    }
+  }
+  
+  return encodeRLE(newMask, width, height);
+}
 
 const revokeImageUrl = (url?: string) => {
   if (typeof window === 'undefined' || !url) return;
@@ -59,7 +144,9 @@ interface AnnotationStore extends AppState {
   selectAll: () => void;
   toggleAnnotationVisibility: (id: string) => void;
   copySelectedAnnotations: () => void;
-  pasteAnnotations: () => void;
+  startPasting: () => void;  // 進入貼上模式
+  confirmPaste: (x: number, y: number) => void;  // 確認貼上到指定位置
+  cancelPaste: () => void;  // 取消貼上模式
   
   // 工具操作
   setCurrentTool: (tool: AnnotationTool) => void;
@@ -110,6 +197,8 @@ const initialState: AppState = {
   previewMask: null,
   templateImage: null,
   templateBox: null,
+  isPasting: false,
+  pasteOffset: null,
   categories: DEFAULT_CATEGORIES,
   currentCategoryId: 0,  // 0 表示尚無選擇的類別
   history: [],
@@ -285,45 +374,96 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     }
   },
   
-  // 貼上標註到當前圖片
-  pasteAnnotations: () => {
+  // 進入貼上模式（Ctrl+V 觸發）
+  startPasting: () => {
+    const state = get();
+    if (state.copiedAnnotations.length === 0) {
+      console.log('[startPasting] 沒有可貼上的標註');
+      return;
+    }
+    if (!state.currentImage) {
+      console.log('[startPasting] 沒有當前圖片');
+      return;
+    }
+    set({ isPasting: true, pasteOffset: { x: 0, y: 0 } });
+    console.log('[startPasting] 進入貼上模式，請點擊目標位置');
+  },
+  
+  // 確認貼上到指定位置
+  confirmPaste: (clickX: number, clickY: number) => {
     const state = get();
     const { copiedAnnotations, currentImage, annotations } = state;
     
     if (copiedAnnotations.length === 0 || !currentImage) {
-      console.log('[pasteAnnotations] 沒有可貼上的標註或沒有當前圖片');
+      set({ isPasting: false, pasteOffset: null });
       return;
     }
     
-    // 計算偏移量（同圖片時稍微偏移避免完全重疊）
-    const isSameImage = copiedAnnotations[0].imageId === currentImage.id;
-    const offset = isSameImage ? 20 : 0;
+    // 從 mask 實際像素計算質心（與預覽一致）
+    let totalPixelX = 0;
+    let totalPixelY = 0;
+    let totalPixels = 0;
+    
+    copiedAnnotations.forEach(ann => {
+      const mask = decodeRLE(ann.segmentation);
+      const [maskHeight, maskWidth] = ann.segmentation.size;
+      
+      for (let y = 0; y < maskHeight; y++) {
+        for (let x = 0; x < maskWidth; x++) {
+          const idx = y * maskWidth + x;
+          if (mask[idx] === 1) {
+            totalPixelX += x;
+            totalPixelY += y;
+            totalPixels++;
+          }
+        }
+      }
+    });
+    
+    const origCenterX = totalPixels > 0 ? totalPixelX / totalPixels : 0;
+    const origCenterY = totalPixels > 0 ? totalPixelY / totalPixels : 0;
+    
+    // 計算偏移量：從質心到點擊位置
+    const offsetX = clickX - origCenterX;
+    const offsetY = clickY - origCenterY;
     
     const newAnnotations = copiedAnnotations.map((ann, index) => {
       // 調整 bbox（偏移位置）
       const newBbox: [number, number, number, number] = [
-        ann.bbox[0] + offset,
-        ann.bbox[1] + offset,
+        ann.bbox[0] + offsetX,
+        ann.bbox[1] + offsetY,
         ann.bbox[2],
         ann.bbox[3]
       ];
+      
+      // 偏移 RLE 遮罩
+      const newSegmentation = offsetRLE(ann.segmentation, offsetX, offsetY);
       
       return {
         ...ann,
         id: `ann_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`,
         imageId: currentImage.id,
         bbox: newBbox,
+        segmentation: newSegmentation,
         selected: false
       };
     });
     
     set({
       annotations: [...annotations, ...newAnnotations],
-      selectedAnnotationIds: newAnnotations.map(ann => ann.id)
+      selectedAnnotationIds: newAnnotations.map(ann => ann.id),
+      isPasting: false,
+      pasteOffset: null
     });
     
-    console.log(`[pasteAnnotations] 貼上了 ${newAnnotations.length} 個標註到圖片 ${currentImage.id}`);
+    console.log(`[confirmPaste] 貼上了 ${newAnnotations.length} 個標註到位置 (${clickX}, ${clickY}), 偏移 (${offsetX}, ${offsetY})`);
     get().saveToHistory();
+  },
+  
+  // 取消貼上模式
+  cancelPaste: () => {
+    set({ isPasting: false, pasteOffset: null });
+    console.log('[cancelPaste] 取消貼上模式');
   },
   
   // 工具操作

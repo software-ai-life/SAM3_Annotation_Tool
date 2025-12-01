@@ -70,7 +70,9 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
     toggleShortcuts,
     currentTool,
     copySelectedAnnotations,
-    pasteAnnotations
+    startPasting,
+    cancelPaste,
+    isPasting
   } = useAnnotationStore();
 
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
@@ -146,7 +148,7 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
           event.preventDefault();
           return;
         case 'v':
-          pasteAnnotations();
+          startPasting();
           event.preventDefault();
           return;
         case '/':
@@ -172,6 +174,12 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
 
     // 取消操作
     if (key === 'Escape') {
+      // 如果在貼上模式，先取消貼上
+      if (isPasting) {
+        cancelPaste();
+        event.preventDefault();
+        return;
+      }
       clearTempPoints();
       setTempBox(null);
       deselectAll();
@@ -222,7 +230,9 @@ export function useKeyboardShortcuts({ onConfirm, onSave }: UseKeyboardShortcuts
     toggleShortcuts,
     currentTool,
     copySelectedAnnotations,
-    pasteAnnotations,
+    startPasting,
+    cancelPaste,
+    isPasting,
     onConfirm,
     onSave
   ]);

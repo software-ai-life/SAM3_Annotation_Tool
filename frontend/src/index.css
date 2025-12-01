@@ -63,6 +63,10 @@ body {
   cursor: copy;
 }
 
+.annotation-canvas.tool-paste {
+  cursor: copy;
+}
+
 /* Keyboard shortcuts tooltip */
 .kbd {
   @apply inline-flex items-center justify-center px-2 py-1 text-xs font-medium text-gray-800 bg-gray-100 border border-gray-300 rounded;

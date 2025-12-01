@@ -333,6 +333,9 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
   const [isDrawingBox, setIsDrawingBox] = useState(false);
   const [boxStart, setBoxStart] = useState({ x: 0, y: 0 });
   
+  // 滑鼠位置（用於貼上預覽）
+  const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
+  
   // 控制點編輯狀態
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
   const [controlPoints, setControlPoints] = useState<ControlPoint[]>([]);
@@ -348,6 +351,8 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     previewMask,
     templateImage,
     templateBox,
+    isPasting,
+    copiedAnnotations,
     setTempBox,
     addTempPoint,
     clearTempPoints,
@@ -359,6 +364,8 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     deselectAll,
     addAnnotation,
     addAnnotations,
+    confirmPaste,
+    cancelPaste,
     categories,
     currentCategoryId,
     confidenceThreshold,
@@ -743,7 +750,88 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
         ctx.fillText('✓ 已選模板', (templateBox.x1 + templateBox.x2) / 2, templateBox.y1 - 8);
       }
     }
-  }, [currentImage, annotations, tempPoints, tempBox, previewMask, controlPoints, editingAnnotationId, draggingPointIndex, currentTool, templateImage, templateBox]);
+    
+    // 繪製貼上預覽（跟隨滑鼠的 mask 預覽）
+    if (isPasting && copiedAnnotations.length > 0 && mousePosition) {
+      // 從 mask 實際像素計算中心點（更準確）
+      let totalPixelX = 0;
+      let totalPixelY = 0;
+      let totalPixels = 0;
+      
+      copiedAnnotations.forEach(ann => {
+        const mask = decodeRLE(ann.segmentation);
+        const [maskHeight, maskWidth] = ann.segmentation.size;
+        
+        // 計算 mask 中所有像素的中心（使用 row-major 索引）
+        for (let y = 0; y < maskHeight; y++) {
+          for (let x = 0; x < maskWidth; x++) {
+            const idx = y * maskWidth + x;
+            if (mask[idx] === 1) {
+              totalPixelX += x;
+              totalPixelY += y;
+              totalPixels++;
+            }
+          }
+        }
+      });
+      
+      // 計算 mask 的質心
+      const origCenterX = totalPixels > 0 ? totalPixelX / totalPixels : 0;
+      const origCenterY = totalPixels > 0 ? totalPixelY / totalPixels : 0;
+      
+      // 計算偏移量：讓質心移動到滑鼠位置
+      const offsetX = mousePosition.x - origCenterX;
+      const offsetY = mousePosition.y - origCenterY;
+      
+      // 繪製每個複製的標註的預覽
+      copiedAnnotations.forEach((ann) => {
+        try {
+          const mask = decodeRLE(ann.segmentation);
+          const [height, width] = ann.segmentation.size;
+          
+          // 建立臨時 canvas 繪製遮罩
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = width;
+          tempCanvas.height = height;
+          const tempCtx = tempCanvas.getContext('2d');
+          if (tempCtx) {
+            // 使用半透明橙色顯示貼上預覽
+            drawMask(tempCtx, mask, width, height, '#f97316', 0.5);
+          }
+          
+          // 在偏移後的位置繪製整個 mask canvas
+          ctx.drawImage(tempCanvas, offsetX, offsetY);
+          
+          // 繪製預覽邊界框（也偏移）
+          const [x, y, w, h] = ann.bbox;
+          ctx.strokeStyle = '#f97316';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.strokeRect(x + offsetX, y + offsetY, w, h);
+          ctx.setLineDash([]);
+        } catch (e) {
+          console.warn('Failed to draw paste preview:', e);
+        }
+      });
+      
+      // 顯示貼上提示
+      ctx.fillStyle = 'rgba(249, 115, 22, 0.9)';
+      ctx.font = 'bold 14px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('點擊放置 / 右鍵取消', mousePosition.x, mousePosition.y - 15);
+      
+      // 繪製十字準星
+      ctx.strokeStyle = '#f97316';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(mousePosition.x - 10, mousePosition.y);
+      ctx.lineTo(mousePosition.x + 10, mousePosition.y);
+      ctx.moveTo(mousePosition.x, mousePosition.y - 10);
+      ctx.lineTo(mousePosition.x, mousePosition.y + 10);
+      ctx.stroke();
+    }
+  }, [currentImage, annotations, tempPoints, tempBox, previewMask, controlPoints, editingAnnotationId, draggingPointIndex, currentTool, templateImage, templateBox, isPasting, copiedAnnotations, mousePosition]);
 
   // 當選中標註時，載入控制點
   useEffect(() => {
@@ -1083,6 +1171,16 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     
     const { x, y } = screenToImage(e.clientX, e.clientY);
     
+    // 如果在貼上模式，點擊確認貼上位置
+    if (isPasting) {
+      if (e.button === 0) {  // 左鍵確認
+        confirmPaste(x, y);
+      } else if (e.button === 2) {  // 右鍵取消
+        cancelPaste();
+      }
+      return;
+    }
+    
     // 先檢查是否點擊到控制點
     if (controlPoints.length > 0) {
       const pointIndex = findControlPointAtPosition(x, y);
@@ -1120,7 +1218,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       setBoxStart({ x, y });
       setTempBox({ x1: x, y1: y, x2: x, y2: y });
     }
-  }, [currentImage, currentTool, screenToImage, offset, setTempBox, controlPoints, findControlPointAtPosition, findAnnotationAtPosition, selectAnnotation, deselectAll, addPointAndUpdatePreview]);
+  }, [currentImage, currentTool, screenToImage, offset, setTempBox, controlPoints, findControlPointAtPosition, findAnnotationAtPosition, selectAnnotation, deselectAll, addPointAndUpdatePreview, isPasting, confirmPaste, cancelPaste]);
 
   // 處理右鍵選單（禁止預設行為並處理負向點）
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1185,6 +1283,12 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     
     const { x, y } = screenToImage(e.clientX, e.clientY);
     
+    // 如果在貼上模式，更新滑鼠位置
+    if (isPasting) {
+      setMousePosition({ x, y });
+      return;
+    }
+    
     // 拖曳控制點
     if (draggingPointIndex !== null) {
       const newPoints = [...controlPoints];
@@ -1206,7 +1310,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
         y2: Math.max(boxStart.y, y)
       });
     }
-  }, [currentImage, isDragging, isDrawingBox, dragStart, boxStart, screenToImage, setTempBox, draggingPointIndex, controlPoints]);
+  }, [currentImage, isDragging, isDrawingBox, dragStart, boxStart, screenToImage, setTempBox, draggingPointIndex, controlPoints, isPasting]);
 
   // 處理滑鼠釋放
   const handleMouseUp = useCallback(() => {
@@ -1291,6 +1395,9 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
 
   // 獲取游標樣式
   const getCursorClass = () => {
+    // 貼上模式使用特殊游標
+    if (isPasting) return 'tool-paste';
+    
     switch (currentTool) {
       case 'pointer': return 'tool-pointer';
       case 'add-point': return 'tool-add-point';

@@ -132,6 +132,10 @@ export interface AppState {
   templateImage: ImageInfo | null;
   templateBox: BoundingBox | null;
   
+  // 貼上預覽狀態
+  isPasting: boolean;  // 是否處於貼上模式
+  pasteOffset: { x: number; y: number } | null;  // 貼上位置偏移
+  
   // 類別
   categories: Category[];
   currentCategoryId: number;
