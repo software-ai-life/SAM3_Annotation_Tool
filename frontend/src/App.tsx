@@ -1,5 +1,5 @@
-import { useRef, useCallback, useState, useEffect } from 'react';
-import { Toolbar } from './components/Toolbar';
+import { useCallback, useState, useEffect } from 'react';
+import { Toolbar, ExportOptions } from './components/Toolbar';
 import { AnnotationCanvas } from './components/AnnotationCanvas';
 import { AnnotationList } from './components/AnnotationList';
 import { TextPromptPanel } from './components/TextPromptPanel';
@@ -15,15 +15,11 @@ import * as api from './services/api';
 import type { SegmentationResult, ImageInfo, AutoSaveData } from './types';
 
 function App() {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-  
   // 恢復模式狀態
   const [pendingRecovery, setPendingRecovery] = useState<AutoSaveData | null>(null);
   
   const {
     currentImage,
-    addImages,
     setImages,
     setCurrentImage,
     addAnnotations,
@@ -197,8 +193,53 @@ function App() {
     }
   }, [currentImage, confidenceThreshold, handleSegmentationResults, setLoading, setError]);
 
-  // 處理導出
-  const handleExport = useCallback(async () => {
+  // 處理上傳圖片
+  const handleUploadImages = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const uploadedImages: ImageInfo[] = [];
+      
+      for (const file of files) {
+        if (!file.type.startsWith('image/')) {
+          console.warn(`跳過非圖片檔案: ${file.name}`);
+          continue;
+        }
+        
+        try {
+          const imageInfo = await api.uploadImage(file);
+          uploadedImages.push(imageInfo);
+        } catch (err: any) {
+          console.error(`上傳失敗 ${file.name}:`, err);
+          setError(`上傳 ${file.name} 失敗: ${err.message}`);
+        }
+      }
+      
+      if (uploadedImages.length > 0) {
+        // 添加到圖片列表
+        setImages([...images, ...uploadedImages]);
+        
+        // 如果沒有當前圖片，設定第一張為當前圖片
+        if (!currentImage) {
+          setCurrentImage(uploadedImages[0]);
+        }
+        
+        console.log(`成功上傳 ${uploadedImages.length} 張圖片`);
+      }
+    } catch (err: any) {
+      setError(err.message || '上傳失敗');
+    } finally {
+      setLoading(false);
+    }
+  }, [images, currentImage, setImages, setCurrentImage, setLoading, setError]);
+
+  // 處理導出 (支援多種格式)
+  const handleExport = useCallback(async (options: ExportOptions) => {
+    const { format, includeImages } = options;
+    
     if (annotations.length === 0) {
       setError('沒有標註可以導出');
       return;
@@ -207,59 +248,28 @@ function App() {
     setLoading(true);
     
     try {
-      const cocoData = await api.exportCOCO(images, annotations, categories);
-      // 導出 COCO JSON + 圖片壓縮成 ZIP
-      await api.downloadCOCOWithImages(cocoData, images, 'annotations_coco.zip');
+      switch (format) {
+        case 'coco':
+          const cocoData = await api.exportCOCO(images, annotations, categories);
+          if (includeImages) {
+            await api.downloadCOCOWithImages(cocoData, images, 'annotations_coco.zip');
+          } else {
+            api.downloadCOCOJSON(cocoData, 'instances_default.json');
+          }
+          break;
+        case 'yolo-seg':
+          await api.downloadYOLOWithImages(images, annotations, categories, 'annotations_yolo_seg.zip', true, includeImages);
+          break;
+        case 'yolo-bbox':
+          await api.downloadYOLOWithImages(images, annotations, categories, 'annotations_yolo_bbox.zip', false, includeImages);
+          break;
+      }
     } catch (err: any) {
       setError(err.message || '導出失敗');
     } finally {
       setLoading(false);
     }
   }, [images, annotations, categories, setLoading, setError]);
-
-  // 處理上傳
-  const handleUpload = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const handleFolderUpload = useCallback(() => {
-    folderInputRef.current?.click();
-  }, []);
-
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const uploadedImages = [];
-      for (const file of Array.from(files)) {
-        // 只處理圖片檔案
-        if (!file.type.startsWith('image/')) continue;
-        
-        const imageInfo = await api.uploadImage(file);
-        uploadedImages.push(imageInfo);
-      }
-      
-      if (uploadedImages.length > 0) {
-        addImages(uploadedImages);
-        if (uploadedImages.some(img => img.isLocalOnly)) {
-          setError('有部分圖片僅在本地瀏覽，請確認後端服務後重新上傳以使用分割功能。');
-        }
-      } else {
-        setError('沒有找到有效的圖片檔案');
-      }
-    } catch (err: any) {
-      setError(err.message || '上傳失敗');
-    } finally {
-      setLoading(false);
-    }
-    
-    // Reset input
-    e.target.value = '';
-  }, [addImages, setLoading, setError]);
 
   // 處理恢復暫存資料
   const handleRecovery = useCallback(async (files: FileList) => {
@@ -347,30 +357,10 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* 隱藏的檔案輸入 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp,image/bmp"
-        onChange={handleFileChange}
-        className="hidden"
-        multiple
-      />
-      <input
-        ref={folderInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp,image/bmp"
-        onChange={handleFileChange}
-        className="hidden"
-        multiple
-        {...{ webkitdirectory: '', directory: '' } as any}
-      />
-      
       {/* 工具列 */}
       <Toolbar 
-        onUpload={handleUpload} 
-        onFolderUpload={handleFolderUpload}
         onExport={handleExport}
+        onUploadImages={handleUploadImages}
       />
 
       {/* 圖片導航列 */}

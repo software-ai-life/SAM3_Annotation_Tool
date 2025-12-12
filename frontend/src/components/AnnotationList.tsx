@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, EyeOff, Trash2, ChevronDown, ChevronRight, Plus, X, Edit2, Check } from 'lucide-react';
+import { Eye, EyeOff, Trash2, ChevronDown, ChevronRight, Plus, X, Edit2, Check, Tag } from 'lucide-react';
 import { useAnnotationStore, COLOR_PALETTE } from '../store/annotationStore';
 
 export function AnnotationList() {
@@ -10,6 +10,7 @@ export function AnnotationList() {
     selectAnnotation,
     toggleAnnotationVisibility,
     deleteAnnotation,
+    updateAnnotation,
     categories,
     currentCategoryId,
     setCurrentCategoryId,
@@ -30,6 +31,43 @@ export function AnnotationList() {
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
   const [showColorPicker, setShowColorPicker] = useState<number | 'new' | null>(null);
+  const [changingCategoryAnnotationId, setChangingCategoryAnnotationId] = useState<string | null>(null);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+
+  // 修改標註的類別
+  const handleChangeAnnotationCategory = (annotationId: string, newCategoryId: number) => {
+    const newCategory = categories.find(c => c.id === newCategoryId);
+    if (newCategory) {
+      updateAnnotation(annotationId, {
+        categoryId: newCategoryId,
+        categoryName: newCategory.name,
+        color: newCategory.color
+      });
+    }
+    setChangingCategoryAnnotationId(null);
+  };
+
+  // 處理標註點擊（支援 Shift 範圍選擇）
+  const handleAnnotationClick = (annotationId: string, index: number, event: React.MouseEvent) => {
+    const isCtrlOrMeta = event.ctrlKey || event.metaKey;
+    const isShift = event.shiftKey;
+
+    if (isShift && lastSelectedIndex !== null) {
+      // Shift + 點擊：範圍選擇
+      const start = Math.min(lastSelectedIndex, index);
+      const end = Math.max(lastSelectedIndex, index);
+      const rangeIds = currentAnnotations.slice(start, end + 1).map(ann => ann.id);
+      
+      // 選擇範圍內所有標註
+      rangeIds.forEach((id, idx) => {
+        selectAnnotation(id, idx > 0); // 第一個不用 multi，後續都用 multi
+      });
+    } else {
+      // 一般點擊或 Ctrl+點擊
+      selectAnnotation(annotationId, isCtrlOrMeta);
+      setLastSelectedIndex(index);
+    }
+  };
 
   const toggleCategory = (categoryId: number) => {
     const newExpanded = new Set(expandedCategories);
@@ -319,52 +357,112 @@ export function AnnotationList() {
                 
                 {isExpanded && (
                   <div className="ml-6 mt-1 space-y-1">
-                    {categoryAnnotations.map(ann => (
-                      <div
-                        key={ann.id}
-                        onClick={(e) => {
-                          selectAnnotation(ann.id, e.ctrlKey || e.metaKey || e.shiftKey);
-                        }}
-                        className={`
-                          flex items-center gap-2 p-2.5 rounded-xl cursor-pointer text-sm transition-all
-                          ${selectedAnnotationIds.includes(ann.id)
-                            ? 'bg-amber-100 border border-amber-300 shadow-sm'
-                            : 'hover:bg-stone-100 border border-transparent'
-                          }
-                        `}
-                      >
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ backgroundColor: ann.color }}
-                        />
-                        <span className="flex-1 truncate text-stone-600">
-                          {ann.categoryName} #{ann.id.slice(-4)}
-                        </span>
-                        <span className="text-xs text-stone-400">
-                          {(ann.score * 100).toFixed(0)}%
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleAnnotationVisibility(ann.id);
-                          }}
-                          className="p-1 hover:bg-stone-200 rounded-lg text-stone-400 hover:text-stone-600 transition-all"
-                          title={ann.visible ? '隱藏' : '顯示'}
+                    {categoryAnnotations.map((ann) => {
+                      // 計算在整體標註列表中的索引
+                      const globalIdx = currentAnnotations.findIndex(a => a.id === ann.id);
+                      
+                      return (
+                        <div
+                          key={ann.id}
+                          className="relative"
                         >
-                          {ann.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteAnnotation(ann.id);
-                          }}
-                          className="p-1 hover:bg-red-50 rounded-lg text-stone-400 hover:text-red-500 transition-all"
-                          title="刪除"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                          <div
+                            onClick={(e) => {
+                              if (changingCategoryAnnotationId !== ann.id) {
+                                handleAnnotationClick(ann.id, globalIdx, e);
+                              }
+                            }}
+                            className={`
+                              flex items-center gap-2 p-2.5 rounded-xl cursor-pointer text-sm transition-all
+                              ${selectedAnnotationIds.includes(ann.id)
+                                ? 'bg-amber-100 border border-amber-300 shadow-sm'
+                                : 'hover:bg-stone-100 border border-transparent'
+                              }
+                            `}
+                          >
+                          <span
+                            className="w-2.5 h-2.5 rounded-full"
+                            style={{ backgroundColor: ann.color }}
+                          />
+                          <span className="flex-1 truncate text-stone-600">
+                            {ann.categoryName} #{ann.id.slice(-4)}
+                          </span>
+                          <span className="text-xs text-stone-400">
+                            {(ann.score * 100).toFixed(0)}%
+                          </span>
+                          {/* 修改類別按鈕 */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setChangingCategoryAnnotationId(
+                                changingCategoryAnnotationId === ann.id ? null : ann.id
+                              );
+                            }}
+                            className="p-1 hover:bg-blue-50 rounded-lg text-stone-400 hover:text-blue-500 transition-all"
+                            title="修改類別"
+                          >
+                            <Tag size={14} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAnnotationVisibility(ann.id);
+                            }}
+                            className="p-1 hover:bg-stone-200 rounded-lg text-stone-400 hover:text-stone-600 transition-all"
+                            title={ann.visible ? '隱藏' : '顯示'}
+                          >
+                            {ann.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteAnnotation(ann.id);
+                            }}
+                            className="p-1 hover:bg-red-50 rounded-lg text-stone-400 hover:text-red-500 transition-all"
+                            title="刪除"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        
+                        {/* 類別選擇下拉選單 */}
+                        {changingCategoryAnnotationId === ann.id && (
+                          <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-stone-200 rounded-lg shadow-lg z-10 overflow-hidden">
+                            <div className="p-2 text-xs text-stone-500 border-b border-stone-100">
+                              選擇新類別：
+                            </div>
+                            <div className="max-h-40 overflow-y-auto">
+                              {categories.map(cat => (
+                                <button
+                                  key={cat.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleChangeAnnotationCategory(ann.id, cat.id);
+                                  }}
+                                  className={`
+                                    w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-all
+                                    ${cat.id === ann.categoryId 
+                                      ? 'bg-amber-50 text-amber-700' 
+                                      : 'hover:bg-stone-50 text-stone-600'
+                                    }
+                                  `}
+                                >
+                                  <span
+                                    className="w-3 h-3 rounded-full"
+                                    style={{ backgroundColor: cat.color }}
+                                  />
+                                  <span className="flex-1">{cat.name}</span>
+                                  {cat.id === ann.categoryId && (
+                                    <Check size={14} className="text-amber-600" />
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                    );
+                  })}
                   </div>
                 )}
               </div>

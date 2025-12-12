@@ -80,6 +80,44 @@ function encodeRLE(mask: Uint8Array, width: number, height: number): RLEMask {
 }
 
 /**
+ * 從 RLE 遮罩計算 bbox 和 area
+ * 返回 [x, y, width, height] 格式的 bbox 和像素面積
+ */
+function computeBboxAndAreaFromRLE(rle: RLEMask): { bbox: [number, number, number, number]; area: number } {
+  const [height, width] = rle.size;
+  const mask = decodeRLE(rle);
+  
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  let area = 0;
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (mask[idx] === 1) {
+        area++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  
+  // 如果沒有任何像素，返回零 bbox
+  if (area === 0) {
+    return { bbox: [0, 0, 0, 0], area: 0 };
+  }
+  
+  return {
+    bbox: [minX, minY, maxX - minX + 1, maxY - minY + 1],
+    area
+  };
+}
+
+/**
  * 偏移 RLE 遮罩
  * 與 drawMask 使用相同的索引方式：idx 直接對應線性陣列索引
  * imageData 是 row-major：idx = y * width + x
@@ -452,26 +490,24 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     const offsetY = clickY - origCenterY;
     
     const newAnnotations = copiedAnnotations.map((ann, index) => {
-      // 調整 bbox（偏移位置）
-      const newBbox: [number, number, number, number] = [
-        ann.bbox[0] + offsetX,
-        ann.bbox[1] + offsetY,
-        ann.bbox[2],
-        ann.bbox[3]
-      ];
-      
-      // 偏移 RLE 遮罩
+      // 先偏移 RLE 遮罩
       const newSegmentation = offsetRLE(ann.segmentation, offsetX, offsetY);
+      
+      // 從偏移後的遮罩重新計算 bbox 和 area（這樣 bbox 才會準確對應 mask）
+      const { bbox: newBbox, area: newArea } = computeBboxAndAreaFromRLE(newSegmentation);
       
       return {
         ...ann,
         id: `ann_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`,
         imageId: currentImage.id,
         bbox: newBbox,
+        area: newArea,
         segmentation: newSegmentation,
         selected: false
       };
-    });
+    })
+    // 過濾掉空的標註（完全超出圖片範圍的）
+    .filter(ann => ann.area > 0);
     
     set({
       annotations: [...annotations, ...newAnnotations],
@@ -559,11 +595,32 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => ({
     };
   }),
 
-  updateCategory: (id, updates) => set((state) => ({
-    categories: state.categories.map(c => 
+  updateCategory: (id, updates) => set((state) => {
+    // 更新類別
+    const newCategories = state.categories.map(c => 
       c.id === id ? { ...c, ...updates } : c
-    )
-  })),
+    );
+    
+    // 如果顏色或名稱有更新，同時更新該類別所有標註
+    let newAnnotations = state.annotations;
+    if (updates.color || updates.name) {
+      newAnnotations = state.annotations.map(ann => {
+        if (ann.categoryId === id) {
+          return {
+            ...ann,
+            ...(updates.color && { color: updates.color }),
+            ...(updates.name && { categoryName: updates.name })
+          };
+        }
+        return ann;
+      });
+    }
+    
+    return {
+      categories: newCategories,
+      annotations: newAnnotations
+    };
+  }),
   
   // 載入專案時使用 - 直接設定類別列表
   setCategories: (categories) => set({

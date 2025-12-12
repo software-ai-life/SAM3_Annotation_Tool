@@ -95,6 +95,15 @@ class ImageInfoWithData(BaseModel):
     image_url: str  # data:image/jpeg;base64,... format
 
 
+class RegisterImageRequest(BaseModel):
+    """Request to register an image with base64 data (for CVAT loaded images)"""
+    image_id: str
+    image_data: str  # data:image/jpeg;base64,... format
+    file_name: str
+    width: int
+    height: int
+
+
 class Category(BaseModel):
     """Category information"""
     id: int

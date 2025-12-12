@@ -22,6 +22,7 @@ env/
 *.onnx
 *.bin
 checkpoints/
+models/
 
 # IDE
 .idea/

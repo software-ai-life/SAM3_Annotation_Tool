@@ -340,6 +340,8 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
   const [controlPoints, setControlPoints] = useState<ControlPoint[]>([]);
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
+  // 邊界線上的懸停點位置（用於顯示可新增控制點的提示）
+  const [hoverEdgePoint, setHoverEdgePoint] = useState<{ x: number; y: number } | null>(null);
   
   const {
     currentImage,
@@ -579,20 +581,24 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
           ctx.closePath();
           // 使用白色外框 + 黑色內框增加可見度
           ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 4;
+          ctx.lineWidth = 3;
           ctx.stroke();
           ctx.strokeStyle = '#000000';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 1;
           ctx.stroke();
           
-          // 繪製控制點（增大尺寸，使用高對比色）
+          // 繪製控制點（固定視覺大小，不隨縮放變化）
           controlPoints.forEach((point, idx) => {
             const isActive = draggingPointIndex === idx;
-            const pointRadius = isActive ? 10 : 8;
+            // 除以 scale 讓點在視覺上保持固定大小（縮小尺寸）
+            const pointRadius = (isActive ? 5 : 4) / scale;
+            const shadowRadius = pointRadius + 1 / scale;
+            const centerRadius = 1.5 / scale;
+            const borderWidth = 1 / scale;
             
             // 外圈（黑色陰影效果）
             ctx.beginPath();
-            ctx.arc(point.x, point.y, pointRadius + 2, 0, Math.PI * 2);
+            ctx.arc(point.x, point.y, shadowRadius, 0, Math.PI * 2);
             ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
             ctx.fill();
             
@@ -604,15 +610,49 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
             
             // 內圈邊框（深色）
             ctx.strokeStyle = '#1f2937';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = borderWidth;
             ctx.stroke();
             
             // 中心小點（標示位置）
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+            ctx.arc(point.x, point.y, centerRadius, 0, Math.PI * 2);
             ctx.fillStyle = '#1f2937';
             ctx.fill();
           });
+          
+          // 繪製邊界線上的懸停提示（可雙擊新增控制點）
+          if (hoverEdgePoint) {
+            const hoverRadius = 4 / scale;
+            const hoverShadowRadius = hoverRadius + 1 / scale;
+            
+            // 外圈（陰影效果）
+            ctx.beginPath();
+            ctx.arc(hoverEdgePoint.x, hoverEdgePoint.y, hoverShadowRadius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fill();
+            
+            // 主圓點（綠色表示可新增）
+            ctx.beginPath();
+            ctx.arc(hoverEdgePoint.x, hoverEdgePoint.y, hoverRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#22c55e';  // 綠色
+            ctx.fill();
+            
+            // 邊框
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1 / scale;
+            ctx.stroke();
+            
+            // + 符號
+            const plusSize = 2 / scale;
+            ctx.beginPath();
+            ctx.moveTo(hoverEdgePoint.x - plusSize, hoverEdgePoint.y);
+            ctx.lineTo(hoverEdgePoint.x + plusSize, hoverEdgePoint.y);
+            ctx.moveTo(hoverEdgePoint.x, hoverEdgePoint.y - plusSize);
+            ctx.lineTo(hoverEdgePoint.x, hoverEdgePoint.y + plusSize);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1 / scale;
+            ctx.stroke();
+          }
         } else if (ann.selected) {
           // 顯示邊界框和編輯提示
           ctx.strokeStyle = ann.color;
@@ -930,7 +970,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
         ctx.fillText(hintText, lastPoint.x + 15, lastPoint.y);
       }
     }
-  }, [currentImage, annotations, tempPoints, tempBox, previewMask, controlPoints, editingAnnotationId, draggingPointIndex, currentTool, templateImage, templateBox, isPasting, copiedAnnotations, mousePosition, polygonPoints]);
+  }, [currentImage, annotations, tempPoints, tempBox, previewMask, controlPoints, editingAnnotationId, draggingPointIndex, currentTool, templateImage, templateBox, isPasting, copiedAnnotations, mousePosition, polygonPoints, scale, hoverEdgePoint]);
 
   // 當選中標註時，載入控制點
   useEffect(() => {
@@ -964,6 +1004,96 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     }
     return null;
   }, [controlPoints, scale]);
+
+  // 計算點到線段的距離，並返回最近點的位置
+  const pointToSegmentDistance = useCallback((
+    px: number, py: number,
+    x1: number, y1: number,
+    x2: number, y2: number
+  ): { distance: number; point: { x: number; y: number } } => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lengthSquared = dx * dx + dy * dy;
+    
+    if (lengthSquared === 0) {
+      // 線段長度為 0，返回起點
+      return {
+        distance: Math.sqrt((px - x1) ** 2 + (py - y1) ** 2),
+        point: { x: x1, y: y1 }
+      };
+    }
+    
+    // 計算投影點的參數 t（限制在 0~1 之間）
+    let t = ((px - x1) * dx + (py - y1) * dy) / lengthSquared;
+    t = Math.max(0, Math.min(1, t));
+    
+    // 計算最近點
+    const nearestX = x1 + t * dx;
+    const nearestY = y1 + t * dy;
+    
+    return {
+      distance: Math.sqrt((px - nearestX) ** 2 + (py - nearestY) ** 2),
+      point: { x: nearestX, y: nearestY }
+    };
+  }, []);
+
+  // 在控制點邊界線上找到最近的線段，返回插入位置和座標
+  const findNearestEdgePosition = useCallback((x: number, y: number): { 
+    insertIndex: number; 
+    point: { x: number; y: number };
+    distance: number;
+  } | null => {
+    if (controlPoints.length < 2) return null;
+    
+    let minDistance = Infinity;
+    let insertIndex = -1;
+    let nearestPoint = { x: 0, y: 0 };
+    
+    // 檢查所有邊（包括最後一點到第一點的閉合邊）
+    for (let i = 0; i < controlPoints.length; i++) {
+      const p1 = controlPoints[i];
+      const p2 = controlPoints[(i + 1) % controlPoints.length];
+      
+      const result = pointToSegmentDistance(x, y, p1.x, p1.y, p2.x, p2.y);
+      
+      if (result.distance < minDistance) {
+        minDistance = result.distance;
+        insertIndex = i + 1; // 插入到 p1 和 p2 之間
+        nearestPoint = result.point;
+      }
+    }
+    
+    if (insertIndex === -1) return null;
+    
+    return {
+      insertIndex: insertIndex === controlPoints.length ? controlPoints.length : insertIndex,
+      point: nearestPoint,
+      distance: minDistance
+    };
+  }, [controlPoints, pointToSegmentDistance]);
+
+  // 在邊界線上新增控制點
+  const addControlPointOnEdge = useCallback((x: number, y: number): boolean => {
+    if (!editingAnnotationId || controlPoints.length < 3) return false;
+    
+    const edgeHitRadius = 15 / scale; // 邊緣點擊判定半徑
+    const result = findNearestEdgePosition(x, y);
+    
+    if (!result || result.distance > edgeHitRadius) return false;
+    
+    // 建立新的控制點陣列，在指定位置插入新點
+    const newPoints: ControlPoint[] = [
+      ...controlPoints.slice(0, result.insertIndex),
+      { x: result.point.x, y: result.point.y, index: result.insertIndex },
+      ...controlPoints.slice(result.insertIndex)
+    ];
+    
+    // 重新編號 index
+    const reindexedPoints = newPoints.map((p, i) => ({ ...p, index: i }));
+    setControlPoints(reindexedPoints);
+    
+    return true;
+  }, [editingAnnotationId, controlPoints, scale, findNearestEdgePosition]);
 
   // 檢查點擊位置是否在某個標註的遮罩內
   const findAnnotationAtPosition = useCallback((x: number, y: number): string | null => {
@@ -1095,7 +1225,6 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     try {
       setLoading(true);
       setError(null);
-
       const results = await segmentWithBox(
         currentImage.id,
         box,
@@ -1198,7 +1327,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
           segmentation: result.mask_rle,
           bbox: result.box as [number, number, number, number],
           score: result.score,
-          area: result.area,
+          area: result.area
         }));
 
         addAnnotations(annotationsToAdd);
@@ -1330,6 +1459,14 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!currentImage) return;
     
+    // 滑鼠中鍵（滾輪按下）：在任何工具模式下都可以拖曳平移畫布
+    if (e.button === 1) {
+      e.preventDefault();
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
+      return;
+    }
+    
     const { x, y } = screenToImage(e.clientX, e.clientY);
     
     // 如果在貼上模式，點擊確認貼上位置
@@ -1342,11 +1479,37 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       return;
     }
     
-    // 先檢查是否點擊到控制點
+    // 多邊形工具：最優先處理，避免不必要的運算
+    if (currentTool === 'polygon') {
+      if (e.button === 0) {
+        // 檢查是否點擊到起點（閉合多邊形）
+        if (polygonPoints.length >= 3) {
+          const firstPoint = polygonPoints[0];
+          const dist = Math.sqrt((x - firstPoint.x) ** 2 + (y - firstPoint.y) ** 2);
+          const closeThreshold = 15 / scale;  // 根據縮放調整閉合閾值
+          if (dist < closeThreshold) {
+            // 點擊起點，閉合並建立標註
+            confirmPolygon();
+            return;
+          }
+        }
+        // 新增頂點（直接執行，不需要等待）
+        addPolygonPoint({ x, y });
+      }
+      return;
+    }
+    
+    // 先檢查是否點擊到控制點（拖曳現有控制點）
     if (controlPoints.length > 0) {
       const pointIndex = findControlPointAtPosition(x, y);
       if (pointIndex !== null) {
         setDraggingPointIndex(pointIndex);
+        return;
+      }
+      
+      // 如果沒有點擊到控制點，檢查是否點擊到邊界線上（新增控制點）
+      // 雙擊邊界線新增控制點
+      if (e.detail === 2 && addControlPointOnEdge(x, y)) {
         return;
       }
     }
@@ -1378,25 +1541,8 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       setIsDrawingBox(true);
       setBoxStart({ x, y });
       setTempBox({ x1: x, y1: y, x2: x, y2: y });
-    } else if (currentTool === 'polygon') {
-      // 手動多邊形工具：左鍵新增頂點
-      if (e.button === 0) {
-        // 檢查是否點擊到起點（閉合多邊形）
-        if (polygonPoints.length >= 3) {
-          const firstPoint = polygonPoints[0];
-          const dist = Math.sqrt((x - firstPoint.x) ** 2 + (y - firstPoint.y) ** 2);
-          const closeThreshold = 15 / scale;  // 根據縮放調整閉合閾值
-          if (dist < closeThreshold) {
-            // 點擊起點，閉合並建立標註
-            confirmPolygon();
-            return;
-          }
-        }
-        // 新增頂點
-        addPolygonPoint({ x, y });
-      }
     }
-  }, [currentImage, currentTool, screenToImage, offset, setTempBox, controlPoints, findControlPointAtPosition, findAnnotationAtPosition, selectAnnotation, deselectAll, addPointAndUpdatePreview, isPasting, confirmPaste, cancelPaste, polygonPoints, scale, addPolygonPoint]);
+  }, [currentImage, currentTool, screenToImage, offset, setTempBox, controlPoints, findControlPointAtPosition, findAnnotationAtPosition, selectAnnotation, deselectAll, addPointAndUpdatePreview, isPasting, confirmPaste, cancelPaste, polygonPoints, scale, addPolygonPoint, confirmPolygon, addControlPointOnEdge]);
 
   // 處理右鍵選單（禁止預設行為並處理負向點）
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1486,7 +1632,27 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       const newPoints = [...controlPoints];
       newPoints[draggingPointIndex] = { ...newPoints[draggingPointIndex], x, y };
       setControlPoints(newPoints);
+      setHoverEdgePoint(null);
       return;
+    }
+    
+    // 檢查是否懸停在邊界線上（顯示可新增控制點的提示）
+    if (editingAnnotationId && controlPoints.length >= 3 && !isDragging && !isDrawingBox) {
+      const pointIndex = findControlPointAtPosition(x, y);
+      if (pointIndex === null) {
+        // 沒有懸停在控制點上，檢查是否在邊界線上
+        const edgeHitRadius = 15 / scale;
+        const result = findNearestEdgePosition(x, y);
+        if (result && result.distance < edgeHitRadius) {
+          setHoverEdgePoint(result.point);
+        } else {
+          setHoverEdgePoint(null);
+        }
+      } else {
+        setHoverEdgePoint(null);
+      }
+    } else {
+      setHoverEdgePoint(null);
     }
     
     if (isDragging) {
@@ -1502,7 +1668,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
         y2: Math.max(boxStart.y, y)
       });
     }
-  }, [currentImage, isDragging, isDrawingBox, dragStart, boxStart, screenToImage, setTempBox, draggingPointIndex, controlPoints, isPasting, currentTool, polygonPoints]);
+  }, [currentImage, isDragging, isDrawingBox, dragStart, boxStart, screenToImage, setTempBox, draggingPointIndex, controlPoints, isPasting, currentTool, polygonPoints, editingAnnotationId, scale, findControlPointAtPosition, findNearestEdgePosition]);
 
   // 處理滑鼠釋放
   const handleMouseUp = useCallback(() => {
@@ -1552,13 +1718,33 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
     }
   }, [isDrawingBox, tempBox, setTempBox, draggingPointIndex, editingAnnotationId, controlPoints, annotations, updateAnnotation, updateBoxPreview, currentTool, saveTemplate]);
 
-  // 處理滾輪縮放
+  // 處理滾輪縮放（以滑鼠位置為中心）
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    
+    if (!containerRef.current) return;
+    
+    const rect = containerRef.current.getBoundingClientRect();
+    
+    // 滑鼠在容器中的位置
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // 滑鼠在圖片座標系中的位置（縮放前）
+    const imageX = (mouseX - offset.x) / scale;
+    const imageY = (mouseY - offset.y) / scale;
+    
+    // 計算新的縮放比例
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.max(0.1, Math.min(5, scale * delta));
+    
+    // 計算新的偏移量，使滑鼠位置在縮放後仍指向同一個圖片座標
+    const newOffsetX = mouseX - imageX * newScale;
+    const newOffsetY = mouseY - imageY * newScale;
+    
     setScale(newScale);
-  }, [scale]);
+    setOffset({ x: newOffsetX, y: newOffsetY });
+  }, [scale, offset]);
 
   // 初始化和圖片變更時重繪
   useEffect(() => {
@@ -1587,6 +1773,9 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
 
   // 獲取游標樣式
   const getCursorClass = () => {
+    // 拖曳中使用抓取游標
+    if (isDragging) return 'cursor-grabbing';
+    
     // 貼上模式使用特殊游標
     if (isPasting) return 'tool-paste';
     
@@ -1624,6 +1813,7 @@ export function AnnotationCanvas({ onSegmentRequest: _onSegmentRequest }: Annota
       onMouseLeave={handleMouseUp}
       onWheel={handleWheel}
       onContextMenu={handleContextMenu}
+      onAuxClick={(e) => e.preventDefault()}  // 阻止中鍵預設行為（自動滾動）
     >
       <div
         style={{

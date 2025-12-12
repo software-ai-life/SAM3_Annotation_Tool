@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect } from 'react';
 import { 
   MousePointer2, 
   Plus, 
@@ -5,17 +6,24 @@ import {
   Type, 
   Copy,
   Download,
-  Upload,
-  FolderOpen,
   Undo2,
   Redo2,
   Trash2,
   Keyboard,
   Settings,
-  Pentagon
+  Pentagon,
+  ChevronDown,
+  X,
+  Image
 } from 'lucide-react';
 import { useAnnotationStore } from '../store/annotationStore';
 import type { AnnotationTool } from '../types';
+
+export type ExportFormat = 'coco' | 'yolo-seg' | 'yolo-bbox';
+export interface ExportOptions {
+  format: ExportFormat;
+  includeImages: boolean;
+}
 
 interface ToolButtonProps {
   tool: AnnotationTool;
@@ -48,12 +56,17 @@ function ToolButton({ tool, icon, label, shortcut, currentTool, onClick }: ToolB
 }
 
 interface ToolbarProps {
-  onUpload: () => void;
-  onFolderUpload: () => void;
-  onExport: () => void;
+  onExport: (options: ExportOptions) => void;
+  onUploadImages?: (files: File[]) => void;
 }
 
-export function Toolbar({ onUpload, onFolderUpload, onExport }: ToolbarProps) {
+export function Toolbar({ onExport, onUploadImages }: ToolbarProps) {
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('coco');
+  const [includeImages, setIncludeImages] = useState(true);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  
   const {
     currentTool,
     setCurrentTool,
@@ -72,38 +85,151 @@ export function Toolbar({ onUpload, onFolderUpload, onExport }: ToolbarProps) {
   const canRedo = historyIndex < history.length - 1;
   const hasSelection = selectedAnnotationIds.length > 0;
 
+  // 點擊外部關閉選單
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleExportClick = (format: ExportFormat) => {
+    setSelectedFormat(format);
+    setShowExportMenu(false);
+    setShowExportDialog(true);
+  };
+
+  const handleConfirmExport = () => {
+    setShowExportDialog(false);
+    onExport({ format: selectedFormat, includeImages });
+  };
+
   return (
-    <div className="bg-white/90 backdrop-blur-sm border-b border-amber-200/60 p-3">
-      <div className="flex items-center gap-4">
-        {/* 檔案操作 */}
-        <div className="flex items-center gap-2 border-r border-amber-200/60 pr-4">
-          <button
-            onClick={onUpload}
-            className="flex items-center gap-2 px-4 py-2.5 bg-amber-700 text-amber-50 rounded-xl hover:bg-amber-800 transition-all shadow-md shadow-amber-200 hover:shadow-lg hover:shadow-amber-300"
-            title="上傳圖片"
-          >
-            <Upload size={18} />
-            <span className="text-sm font-medium">上傳</span>
-          </button>
-          <button
-            onClick={onFolderUpload}
-            className="flex items-center gap-2 px-4 py-2.5 bg-stone-600 text-stone-50 rounded-xl hover:bg-stone-700 transition-all shadow-md shadow-stone-200 hover:shadow-lg hover:shadow-stone-300"
-            title="上傳資料夾"
-          >
-            <FolderOpen size={18} />
-            <span className="text-sm font-medium">資料夾</span>
-          </button>
-          <button
-            onClick={onExport}
-            className="flex items-center gap-2 px-4 py-2.5 bg-stone-700 text-stone-50 rounded-xl hover:bg-stone-800 transition-all shadow-md shadow-stone-300 hover:shadow-lg hover:shadow-stone-400"
-            title="導出 COCO JSON"
-          >
-            <Download size={18} />
-            <span className="text-sm font-medium">導出</span>
-          </button>
+    <>
+      {/* 導出設定對話框 - 使用 Portal 效果，放在最外層 */}
+      {showExportDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-[400px]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-stone-800">導出設定</h3>
+              <button
+                onClick={() => setShowExportDialog(false)}
+                className="p-1 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                <X size={20} className="text-stone-500" />
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <div className="text-sm text-stone-600 mb-2">格式：<span className="font-medium text-stone-800">
+                {selectedFormat === 'coco' ? 'COCO Format' : selectedFormat === 'yolo-seg' ? 'YOLO Segmentation' : 'YOLO Detection'}
+              </span></div>
+            </div>
+            
+            <div className="mb-6">
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl hover:bg-stone-50 border border-stone-200">
+                <input
+                  type="checkbox"
+                  checked={includeImages}
+                  onChange={(e) => setIncludeImages(e.target.checked)}
+                  className="w-5 h-5 rounded border-stone-300 text-amber-600 focus:ring-amber-500"
+                />
+                <div className="flex items-center gap-2">
+                  <Image size={20} className="text-stone-500" />
+                  <div>
+                    <div className="text-sm font-medium text-stone-800">包含圖片</div>
+                    <div className="text-xs text-stone-500">將圖片打包到 ZIP 檔案中</div>
+                  </div>
+                </div>
+              </label>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowExportDialog(false)}
+                className="px-4 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmExport}
+                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <Download size={16} />
+                導出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div className="bg-white/90 backdrop-blur-sm border-b border-amber-200/60 p-3 relative z-50">
+        <div className="flex items-center gap-4">
+          {/* 檔案操作 */}
+          <div className="flex items-center gap-2 border-r border-amber-200/60 pr-4">
+          {/* 上傳圖片按鈕 */}
+          <label className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-indigo-50 rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 hover:shadow-lg hover:shadow-indigo-300 cursor-pointer">
+            <Image size={18} />
+            <span className="text-sm font-medium">上傳圖片</span>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = e.target.files;
+                if (files && onUploadImages) {
+                  onUploadImages(Array.from(files));
+                  e.target.value = ''; // 重置 input 以允許重複上傳相同檔案
+                }
+              }}
+            />
+          </label>
+          
+          {/* 導出下拉選單 */}
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-stone-700 text-stone-50 rounded-xl hover:bg-stone-800 transition-all shadow-md shadow-stone-300 hover:shadow-lg hover:shadow-stone-400"
+              title="導出標註"
+            >
+              <Download size={18} />
+              <span className="text-sm font-medium">導出</span>
+              <ChevronDown size={16} className={`transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
+            </button>
+            
+            {showExportMenu && (
+              <div className="absolute top-full left-0 mt-1 bg-white rounded-xl shadow-xl border border-stone-200 py-1 z-[100] min-w-[180px]">
+                <button
+                  onClick={() => handleExportClick('coco')}
+                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-100 flex items-center gap-2"
+                >
+                  <span className="font-medium">COCO Format</span>
+                  <span className="text-stone-400 text-xs">.json</span>
+                </button>
+                <button
+                  onClick={() => handleExportClick('yolo-seg')}
+                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-100 flex items-center gap-2"
+                >
+                  <span className="font-medium">YOLO Segmentation</span>
+                  <span className="text-stone-400 text-xs">.txt</span>
+                </button>
+                <button
+                  onClick={() => handleExportClick('yolo-bbox')}
+                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-stone-100 flex items-center gap-2"
+                >
+                  <span className="font-medium">YOLO Detection</span>
+                  <span className="text-stone-400 text-xs">.txt</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* 標註工具 */}
+        {/* SAM3 標註工具 */}
         <div className="flex items-center gap-1 border-r border-amber-200/60 pr-4">
           <ToolButton
             tool="pointer"
@@ -145,6 +271,11 @@ export function Toolbar({ onUpload, onFolderUpload, onExport }: ToolbarProps) {
             currentTool={currentTool}
             onClick={setCurrentTool}
           />
+        </div>
+
+        {/* 手動標註工具（非 SAM3） */}
+        <div className="flex items-center gap-1 border-r border-amber-200/60 pr-4">
+          <span className="text-xs text-stone-400 mr-1">手動:</span>
           <ToolButton
             tool="polygon"
             icon={<Pentagon size={20} />}
@@ -222,6 +353,7 @@ export function Toolbar({ onUpload, onFolderUpload, onExport }: ToolbarProps) {
           <Keyboard size={20} />
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

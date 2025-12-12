@@ -2,19 +2,27 @@ version: '3.8'
 
 services:
   sam3-annotation:
-    build: .
-    container_name: sam3_anno
+    image: sam3_annotation
+    container_name: sam3_anno_tool
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # SAM3 模型權重路徑 (設為本地路徑則不會從 HuggingFace 下載)
+      - SAM3_CHECKPOINT_PATH=/app/models/sam3.pt
+      - SAM3_GPU_INDEX=0
     ports:
-      - "5341:5341"
+      - "8000:5341"
+      - "5702:5766"
+    command: ["/bin/bash", "/app/start.sh"]
     volumes:
-      # Mount for Hugging Face cache (for SAM3 model weights)
-      - ~/.cache/huggingface:/root/.cache/huggingface
-      # Mount for uploaded images persistence
-      - ./data:/app/data
+      # Mount start script
+      - ./start.sh:/app/start.sh
+      # Mount local model weights
+      - ./models:/app/models
+      # Mount source code for live reload
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
     deploy:
       resources:
         reservations:

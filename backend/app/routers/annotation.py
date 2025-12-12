@@ -18,7 +18,8 @@ from app.models.schemas import (
     SegmentationResponse,
     SegmentationResult,
     ImageInfo,
-    ImageInfoWithData
+    ImageInfoWithData,
+    RegisterImageRequest
 )
 from app.services.sam3_service import sam3_model
 
@@ -39,8 +40,8 @@ async def upload_image(file: UploadFile = File(...)):
         # Generate unique image ID
         image_id = str(uuid.uuid4())
         
-        # Store image in model
-        sam3_model.set_image(image_id, image)
+        # Store image in model (CPU only, lazy GPU encoding)
+        sam3_model.register_image(image_id, image)
         
         # 也儲存到 cache 供前端取得
         _image_cache[image_id] = image
@@ -75,6 +76,44 @@ async def get_image(image_id: str):
     buffer.seek(0)
     
     return Response(content=buffer.read(), media_type="image/jpeg")
+
+
+@router.post("/register-image", response_model=ImageInfo)
+async def register_image(request: RegisterImageRequest):
+    """Register an image from base64 data (for CVAT loaded images)
+    
+    This allows images loaded from CVAT to be registered with the SAM3 model
+    without going through the file upload process.
+    """
+    try:
+        # Parse base64 data URL
+        if not request.image_data.startswith('data:'):
+            raise HTTPException(status_code=400, detail="Invalid image data format. Expected data URL.")
+        
+        # Extract base64 content
+        header, base64_data = request.image_data.split(',', 1)
+        image_bytes = base64.b64decode(base64_data)
+        
+        # Load image
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        
+        # Register with SAM3 model (lazy loading - no GPU encoding yet)
+        sam3_model.register_image(request.image_id, image)
+        
+        # Also store in cache
+        _image_cache[request.image_id] = image
+        
+        print(f"[register_image] Registered image {request.image_id}, size={image.width}x{image.height} (CPU only, lazy GPU encoding)")
+        
+        return ImageInfo(
+            id=request.image_id,
+            file_name=request.file_name,
+            width=image.width,
+            height=image.height
+        )
+    except Exception as e:
+        print(f"[register_image] Error: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to register image: {str(e)}")
 
 
 @router.post("/segment/text", response_model=SegmentationResponse)

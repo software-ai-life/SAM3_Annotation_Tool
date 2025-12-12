@@ -14,19 +14,22 @@ This is the backend service for the SAM3 Annotation Tool, providing API endpoint
 ```bash
 python -m venv venv
 venv\Scripts\activate  # Windows
+or 
+uv venv --python 3.12
+.venv\Scripts\activate
 # source venv/bin/activate  # Linux/Mac
 ```
 
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 3. Install SAM3:
 ```bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
-pip install -e .
+pip3 install -e .
 ```
 
 4. Authenticate with Hugging Face:

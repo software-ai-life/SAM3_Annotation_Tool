@@ -8,6 +8,11 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from PIL import Image
 
+# 從環境變數讀取 GPU Index，預設為 "0"
+gpu_index = os.getenv("SAM3_GPU_INDEX", "0")
+os.environ["CUDA_VISIBLE_DEVICES"] = gpu_index
+print(f"[SAM3] Using GPU index: {gpu_index}")
+
 # 設定 SAM3 路徑
 # SAM3 內部使用 "from sam3.model.xxx import ..." 的格式
 # 所以需要將 backend/sam3/ 加入 path，讓 sam3/ 成為頂層模組
@@ -22,15 +27,11 @@ SAM3_AVAILABLE = False
 build_sam3_image_model = None
 Sam3Processor = None
 
-try:
-    import torch
-    from sam3.model_builder import build_sam3_image_model
-    from sam3.model.sam3_image_processor import Sam3Processor
-    SAM3_AVAILABLE = True
-    print(f"SAM3 loaded successfully from {SAM3_REPO_ROOT}")
-except ImportError as e:
-    print(f"SAM3 import error: {e}")
-    print("Using mock implementation.")
+
+from sam3.model_builder import build_sam3_image_model
+from sam3.model.sam3_image_processor import Sam3Processor
+SAM3_AVAILABLE = True
+print(f"SAM3 loaded successfully from {SAM3_REPO_ROOT}")
 
 
 class SAM3Wrapper:
@@ -48,6 +49,10 @@ class SAM3Wrapper:
         # Key: image_id, Value: low_res_mask tensor from previous prediction
         self.mask_logits: Dict[str, Any] = {}
         
+        # 限制快取的影像數量，避免 GPU memory 無限增長
+        self.max_cached_images = 3  # 只保留最近 3 張影像的狀態
+        self._image_access_order: List[str] = []  # LRU 順序追蹤
+        
         if self.sam3_available:
             self._load_model()
     
@@ -59,10 +64,22 @@ class SAM3Wrapper:
         try:
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            
+            # 支援本地 checkpoint 路徑 (透過環境變數)
+            checkpoint_path = os.getenv("SAM3_CHECKPOINT_PATH", None)
+            load_from_hf = checkpoint_path is None or checkpoint_path == ""
+            
+            if checkpoint_path:
+                print(f"Loading SAM3 model from local checkpoint: {checkpoint_path}")
+            else:
+                print("Loading SAM3 model from HuggingFace...")
+            
             self.model = build_sam3_image_model(
                 device=device,
                 eval_mode=True,
-                enable_inst_interactivity=True  # Enable point-based interaction
+                enable_inst_interactivity=True,  # Enable point-based interaction
+                checkpoint_path=checkpoint_path if checkpoint_path else None,
+                load_from_HF=load_from_hf
             )
             self.processor = Sam3Processor(self.model, device=device)
             print(f"SAM3 model loaded successfully on {device}")
@@ -70,8 +87,119 @@ class SAM3Wrapper:
             print(f"Failed to load SAM3 model: {e}")
             self.sam3_available = False
     
+    def _cleanup_old_images(self, keep_image_id: str = None):
+        """清理舊的影像狀態以釋放 GPU memory (LRU 策略)"""
+        if len(self._image_access_order) <= self.max_cached_images:
+            return
+        
+        # 需要移除的影像數量
+        num_to_remove = len(self._image_access_order) - self.max_cached_images
+        images_to_remove = self._image_access_order[:num_to_remove]
+        
+        for img_id in images_to_remove:
+            # 不要移除當前正在使用的影像
+            if keep_image_id and img_id == keep_image_id:
+                continue
+                
+            # 清理 GPU tensor 狀態
+            if img_id in self.image_states:
+                state = self.image_states[img_id]
+                # 嘗試釋放 state 中的 GPU tensor
+                if isinstance(state, dict):
+                    for key, value in state.items():
+                        if hasattr(value, 'cpu'):
+                            # 將 tensor 移到 CPU 或刪除
+                            del state[key]
+                del self.image_states[img_id]
+                print(f"[_cleanup_old_images] Removed image state: {img_id}")
+            
+            # 清理 mask logits
+            if img_id in self.mask_logits:
+                del self.mask_logits[img_id]
+            
+            # 清理 PIL image (CPU memory)
+            if img_id in self.images:
+                del self.images[img_id]
+            
+            # 從存取順序中移除
+            if img_id in self._image_access_order:
+                self._image_access_order.remove(img_id)
+        
+        # 強制執行 garbage collection 釋放 GPU memory
+        if self.sam3_available:
+            try:
+                import torch
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                print(f"[_cleanup_old_images] GPU cache cleared, keeping {len(self.image_states)} images")
+            except Exception as e:
+                print(f"[_cleanup_old_images] Failed to clear GPU cache: {e}")
+    
+    def _update_access_order(self, image_id: str):
+        """更新影像存取順序 (LRU)"""
+        if image_id in self._image_access_order:
+            self._image_access_order.remove(image_id)
+        self._image_access_order.append(image_id)
+    
+    def register_image(self, image_id: str, image: Image.Image) -> bool:
+        """Register an image without GPU encoding (lazy loading)
+        
+        This only stores the PIL image in CPU memory.
+        GPU encoding will be done lazily when the user actually tries to segment.
+        """
+        self.images[image_id] = image
+        print(f"[register_image] Stored image {image_id} in CPU memory (size={image.width}x{image.height})")
+        return True
+    
+    def _ensure_image_encoded(self, image_id: str) -> bool:
+        """Ensure the image is encoded on GPU (lazy encoding)
+        
+        If the image is registered but not encoded, encode it now.
+        Returns True if the image is ready for segmentation.
+        """
+        if image_id not in self.images:
+            return False
+        
+        # Already encoded?
+        if image_id in self.image_states:
+            return True
+        
+        # Need to encode now
+        image = self.images[image_id]
+        print(f"[_ensure_image_encoded] Lazy encoding image {image_id}...")
+        
+        # 更新 LRU 順序
+        self._update_access_order(image_id)
+        
+        # 清理舊的影像以釋放 GPU memory
+        self._cleanup_old_images(keep_image_id=image_id)
+        
+        if self.sam3_available and self.processor:
+            state = self.processor.set_image(image)
+            self.image_states[image_id] = state
+            print(f"[_ensure_image_encoded] Image {image_id} encoded on GPU")
+        else:
+            # Mock state for development
+            self.image_states[image_id] = {
+                "width": image.width,
+                "height": image.height
+            }
+        
+        return True
+    
     def set_image(self, image_id: str, image: Image.Image) -> bool:
-        """Set image for processing"""
+        """Set image for processing (immediate GPU encoding)
+        
+        This is kept for backward compatibility.
+        For CVAT loading, use register_image() instead.
+        """
+        # 更新 LRU 順序
+        self._update_access_order(image_id)
+        
+        # 清理舊的影像以釋放 GPU memory
+        self._cleanup_old_images(keep_image_id=image_id)
+        
         self.images[image_id] = image
         
         if self.sam3_available and self.processor:
@@ -93,8 +221,12 @@ class SAM3Wrapper:
         confidence_threshold: float = 0.5
     ) -> List[Dict]:
         """Segment image using text prompt"""
-        if image_id not in self.image_states:
+        # 延遲編碼：確保圖片已編碼
+        if not self._ensure_image_encoded(image_id):
             raise ValueError(f"Image {image_id} not found. Please upload first.")
+        
+        # 更新 LRU 存取順序
+        self._update_access_order(image_id)
         
         if self.sam3_available and self.processor:
             state = self.image_states[image_id].copy()
@@ -121,8 +253,12 @@ class SAM3Wrapper:
         The mask_input (logits from previous prediction) is used for iterative refinement,
         similar to ISAT's approach.
         """
-        if image_id not in self.image_states:
+        # 延遲編碼：確保圖片已編碼
+        if not self._ensure_image_encoded(image_id):
             raise ValueError(f"Image {image_id} not found. Please upload first.")
+        
+        # 更新 LRU 存取順序
+        self._update_access_order(image_id)
         
         if self.sam3_available and self.processor:
             import torch
@@ -289,8 +425,12 @@ class SAM3Wrapper:
         confidence_threshold: float = 0.5
     ) -> List[Dict]:
         """Segment image using box prompt"""
-        if image_id not in self.image_states:
+        # 延遲編碼：確保圖片已編碼
+        if not self._ensure_image_encoded(image_id):
             raise ValueError(f"Image {image_id} not found. Please upload first.")
+        
+        # 更新 LRU 存取順序
+        self._update_access_order(image_id)
         
         if self.sam3_available and self.processor:
             state = self.image_states[image_id].copy()
@@ -338,10 +478,14 @@ class SAM3Wrapper:
             template_box: Bounding box of the exemplar object (x1, y1, x2, y2 in pixels)
             confidence_threshold: Minimum confidence score for results
         """
-        if image_id not in self.image_states:
+        # 延遲編碼：確保圖片已編碼
+        if not self._ensure_image_encoded(image_id):
             raise ValueError(f"Image {image_id} not found.")
         if template_image_id not in self.images:
             raise ValueError(f"Template image {template_image_id} not found.")
+        
+        # 更新 LRU 存取順序
+        self._update_access_order(image_id)
         
         # Check if this is cross-image detection
         if image_id != template_image_id:
